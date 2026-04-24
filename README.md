@@ -1,36 +1,36 @@
 # RAZE Router
 
-RAZE is a free AI router test web app for a Discord server community. It presents a live-feeling model registry, cinematic model cards, a user command dashboard, an admin-controlled registry panel, and visible release history.
+RAZE is a free AI router test web app for a Discord server community. It is a production-minded frontend shell for model discovery, route testing, provider configuration, caching policy, and admin-controlled model cards.
 
-RAZE is completely free for everyone. There are no subscriptions, billing screens, paid plans, upgrade prompts, or access tiers.
+RAZE is completely free for everyone. There are no subscriptions, billing screens, paid plans, upgrade prompts, credits, invoices, or access tiers.
 
 ## Test build
 
-Current version: `v0.1.0-test`
+Current version: `v0.2.0-test`
 
-This build is a frontend prototype with local seeded data. Real routing, real Google authentication, Discord role mapping, and backend persistence are placeholders for later implementation.
+This build is frontend-only. Real routing, real Google authentication, Discord role mapping, backend persistence, and secret storage must be added before production deployment.
 
 Test access behavior:
 
 - `Continue with Google` is a non-functional test placeholder.
 - `Skip for now` enters preview mode.
-- Temporary test password: `1234`.
+- Admin is hidden: press `Ctrl + M`, then enter `1234`.
+- Do not ship the test code gate in production.
 
-Replace all test-only access behavior before production use.
+## What changed
 
-## Features
-
-- Brutalist/premium landing page
-- Autonomous terminal boot hero
-- Animated system stats
-- Model explorer with filtering and sorting
-- Copyable model IDs
-- Capability icons with hover tooltips
-- Dynamic model cards with optional linked video backgrounds
-- User dashboard without billing or credit concepts
-- Local admin panel prototype
-- Admin-editable video background URL preview
-- Changelog and version roadmap
+- View-based navigation instead of one long scroll page.
+- Hidden admin dashboard opened with `Ctrl + M` and the test code.
+- Rebuilt playground as a route request preview workspace.
+- Stripped fake usage/session content and replaced it with real empty states.
+- Added admin model setup for:
+  - OpenAI-compatible base URLs
+  - Anthropic custom endpoints
+  - Provider model IDs
+  - Secret labels instead of raw key storage
+  - Cache modes for Anthropic, OpenAI-compatible providers, hybrid, or off
+  - Cache TTL and stable-prefix toggles
+- Improved model card video handling with visible fallback/error state when a video URL cannot play.
 
 ## Run locally
 
@@ -45,12 +45,16 @@ Build:
 npm run build
 ```
 
-## Release roadmap
+## Production notes
 
-- `v0.1.0-test` — landing page, hero, stats, model showcase
-- `v0.2.0-test` — model explorer and user dashboard
-- `v0.3.0-test` — admin panel and routing control prototype
-- `v0.4.0-test` — Discord integration and release history placeholders
+Before using RAZE with real users:
+
+- Move provider calls behind a backend proxy.
+- Store provider secrets server-side only.
+- Replace the test admin code with real auth and authorization.
+- Connect Google login and Discord role mapping.
+- Persist models, route configuration, cache policy, and changelog data in a database.
+- Validate direct video URLs server-side if admins can submit media links.
 
 ## License
 
