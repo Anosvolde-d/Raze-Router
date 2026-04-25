@@ -946,7 +946,7 @@ async function proxyCompletion(req, res, kind) {
     metrics.providerErrors += 1
     const incident = createIncident(await readStore(), { model: model.id, provider: provider.provider || 'OpenAI Compatible', status: 0, upstream: error instanceof Error ? error.message : 'provider_fetch_failed', userKeyId: auth.record.id })
     scheduleBackground(() => writeStore(incident.store), { event: 'write_incident_store' })
-    scheduleBackground(() => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, incidentCode: incident.code }), { event: 'write_failed_request_log' })
+    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, incidentCode: incident.code }), { event: 'write_failed_request_log' })
     logEvent('error', 'provider_fetch_failed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, message: error instanceof Error ? error.message : 'unknown_error' })
     trackRequestMetrics(502, Date.now() - started)
     return sendJson(res, 502, { error: { message: `The router is unavailable for now. Error code ${incident.code}.`, type: 'router_unavailable', code: incident.code } })
@@ -957,7 +957,7 @@ async function proxyCompletion(req, res, kind) {
     const providerText = await upstream.text()
     const incident = createIncident(await readStore(), { model: model.id, provider: provider.provider || 'OpenAI Compatible', status: upstream.status, upstream: providerText.slice(0, 8000), userKeyId: auth.record.id })
     scheduleBackground(() => writeStore(incident.store), { event: 'write_incident_store' })
-    scheduleBackground(() => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, incidentCode: incident.code }), { event: 'write_upstream_error_log' })
+    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, incidentCode: incident.code }), { event: 'write_upstream_error_log' })
     logEvent('warn', 'provider_response_failed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, status: upstream.status })
     trackRequestMetrics(502, Date.now() - started)
     return sendJson(res, 502, { error: { message: `The router is unavailable for now. Error code ${incident.code}.`, type: 'router_unavailable', code: incident.code } })
@@ -970,14 +970,14 @@ async function proxyCompletion(req, res, kind) {
       const streamResult = await streamAnthropicAsOpenAi(upstream, res, model.id, model.id, started)
       const outputTokens = tokenEstimateFromResponseText(streamResult.text)
       checkTokenLimit(auth.record.id, outputTokens)
-      scheduleBackground(() => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 200, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, streamed: true }), { event: 'write_stream_log' })
+      scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 200, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, streamed: true }), { event: 'write_stream_log' })
       logEvent('info', 'completion_streamed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: 200 })
       trackRequestMetrics(200, Date.now() - started)
       return
     }
 
     await pipeOpenAiStream(upstream, res, model.id, started)
-    scheduleBackground(() => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, streamed: true }), { event: 'write_stream_log' })
+    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, streamed: true }), { event: 'write_stream_log' })
     logEvent('info', 'completion_streamed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: upstream.status })
     trackRequestMetrics(upstream.status, Date.now() - started)
     return
