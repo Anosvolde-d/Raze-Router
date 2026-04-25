@@ -992,7 +992,7 @@ async function proxyCompletion(req, res, kind) {
     scheduleBackground(() => writeCachedResponse(cacheKey, cacheTtlSeconds, normalized), { event: 'write_cache' })
   }
 
-  scheduleBackground(() => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens }), { event: 'write_request_log' })
+  scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens }), { event: 'write_request_log' })
   logEvent('info', 'completion_finished', { model: model.id, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, cacheable: Boolean(cacheKey), streamed: false })
   trackRequestMetrics(upstream.status, Date.now() - started)
   res.writeHead(upstream.status, {
