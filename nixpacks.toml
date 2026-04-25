@@ -1,0 +1,12 @@
+[phases.setup]
+nvidia = false
+runtime = "node"
+
+[phases.install]
+cmd = "npm ci"
+
+[phases.build]
+cmd = "npm run build"
+
+[start]
+cmd = "node server/index.js"

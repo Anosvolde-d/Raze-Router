@@ -1,0 +1,52 @@
+{
+  "taskId": "019dc4b5-4038-767f-82d6-bc213d21b88b",
+  "todos": [
+    {
+      "id": "d9d4a2c8cac4eeb187383bf00fb75a9c",
+      "content": "Inspect the project structure and key files",
+      "status": "completed"
+    },
+    {
+      "id": "25925b606795a403d8535e7c6f378673",
+      "content": "Analyze architecture, dependencies, and runtime setup",
+      "status": "completed"
+    },
+    {
+      "id": "948cc824a288f65203f45ba6ed002fc9",
+      "content": "Summarize findings and risks",
+      "status": "completed"
+    },
+    {
+      "id": "09e3ff95a7e8dc7ed1adf7a78f6919a6",
+      "content": "Review current implementation against production-readiness requirements",
+      "status": "completed"
+    },
+    {
+      "id": "dd11b9bd40be335dc34d2e5bd8a8b779",
+      "content": "Plan and apply backend fixes: streaming, normalization, Redis cache, TPM, async writes, logging, metrics, CORS",
+      "status": "completed"
+    },
+    {
+      "id": "114ad939ec3006c618c0bdf0fac8d80a",
+      "content": "Plan and apply frontend/content fixes: Google-only auth, remove test artifacts, fix hero copy, StatsBar, Ctrl+M",
+      "status": "completed"
+    },
+    {
+      "id": "f12435874e540d0f5dbf1b7563d13c16",
+      "content": "Fix .env.example, nixpacks.toml, changelog.ts",
+      "status": "completed"
+    },
+    {
+      "id": "5020daa08525e1a4b0bdbe3e9b114e2b",
+      "content": "Validate build (npm run build)",
+      "status": "completed"
+    },
+    {
+      "id": "e5689fe03e4d1d2840da8e01c65dce59",
+      "content": "Git push and Railway env var checklist",
+      "status": "in_progress"
+    }
+  ],
+  "lastUpdated": 1777131821795,
+  "status": "active"
+}

@@ -1,61 +1,109 @@
 # RAZE Router
 
-RAZE is a free AI router test web app for a Discord server community. It is a production-minded frontend shell for model discovery, route testing, provider configuration, caching policy, and admin-controlled model cards.
+RAZE is a free AI router and live model registry for Discord communities. It provides model discovery, route testing, provider configuration, caching policy, session-gated API key generation, request logging, incident tracking, and admin-controlled model cards.
 
-RAZE is completely free for everyone. There are no subscriptions, billing screens, paid plans, upgrade prompts, credits, invoices, or access tiers.
+RAZE is completely free for everyone. No subscriptions, billing, paid plans, upgrade prompts, credits, invoices, or access tiers.
 
-## Test build
+## Current version
 
-Current version: `v0.2.0-test`
+`0.4.0`
 
-This build is frontend-only. Real routing, real Google authentication, Discord role mapping, backend persistence, and secret storage must be added before production deployment.
+## Architecture
 
-Test access behavior:
+- **Frontend**: Vite + React + TypeScript
+- **Backend**: Node.js HTTP server (`server/index.js`)
+- **Storage**: PostgreSQL (primary), Redis (cache), local JSON (fallback)
+- **Deployment**: Railway (Dockerfile or Nixpacks)
 
-- `Continue with Google` is a non-functional test placeholder.
-- `Skip for now` enters preview mode.
-- Admin is hidden: press `Ctrl + M`, then enter `1234`.
-- Do not ship the test code gate in production.
+## Features
 
-## What changed
+- Session-gated API key generation (keys require a valid user profile)
+- Hashed key storage with fingerprint-only display in admin
+- Request logging with input/output/total token estimates and incident codes
+- Context-length validation before provider calls
+- Rate limiting and request size limits
+- Provider secret isolation (keys never stored in model config)
+- Dark chat playground with safe debug preview (no provider brand names)
+- Admin panels for users, keys, request logs, and incidents
+- CORS origin configuration, admin key authentication
+- PostgreSQL and Redis support with local JSON fallback
+- Graceful shutdown for Railway redeployments
 
-- View-based navigation instead of one long scroll page.
-- Hidden admin dashboard opened with `Ctrl + M` and the test code.
-- Rebuilt playground as a route request preview workspace.
-- Stripped fake usage/session content and replaced it with real empty states.
-- Added admin model setup for:
-  - OpenAI-compatible base URLs
-  - Anthropic custom endpoints
-  - Provider model IDs
-  - Secret labels instead of raw key storage
-  - Cache modes for Anthropic, OpenAI-compatible providers, hybrid, or off
-  - Cache TTL and stable-prefix toggles
-- Improved model card video handling with visible fallback/error state when a video URL cannot play.
+## API endpoints
+
+| Method | Path                  | Auth         | Description                          |
+|--------|-----------------------|--------------|--------------------------------------|
+| GET    | /health               | None         | Health check                         |
+| GET    | /api/config           | None         | Public model list                    |
+| GET    | /v1/models            | None         | OpenAI-compatible model list         |
+| GET    | /api/session          | Session      | Get current user                     |
+| POST   | /api/session          | None         | Create or resume session             |
+| POST   | /api/keys             | Session      | Generate API key                     |
+| POST   | /v1/chat/completions  | Bearer rz_*  | Chat completion proxy                |
+| POST   | /v1/messages           | Bearer rz_*  | Anthropic messages proxy             |
+| GET    | /api/admin/config     | Admin        | Full store (redacted secrets)        |
+| PUT    | /api/admin/config     | Admin        | Save store                           |
+| POST   | /api/admin/secrets    | Admin        | Save provider secret                 |
+| POST   | /api/admin/keys       | Admin        | Create admin API key                 |
+| POST   | /api/admin/test-route | Admin        | Test route connectivity              |
+| POST   | /api/admin/users/:id  | Admin        | Ban/unban user                       |
+| POST   | /api/admin/keys/:id   | Admin        | Activate/revoke key                  |
+| GET    | /api/admin/incidents/:code | Admin   | View incident details                |
+| POST   | /api/admin/maintenance | Admin       | Clear models/incidents/keys          |
 
 ## Run locally
 
 ```bash
+cp .env.example .env
+# Edit .env with your admin key and optional provider key
 npm install
-npm run dev
+npm run dev          # frontend dev server
+npm run dev:server   # backend in separate terminal
 ```
 
-Build:
+Build and run:
 
 ```bash
 npm run build
+npm start
 ```
 
-## Production notes
+## Deploy to Railway
 
-Before using RAZE with real users:
+1. Connect your repo to Railway
+2. Add a PostgreSQL service and a Redis service in the same project
+3. Set environment variables:
+   - `RAZE_ADMIN_KEY` - your secure admin key
+   - `RAZE_PROVIDER_KEY` - your provider API key (or use per-model secret names)
+   - `RAZE_CORS_ORIGIN` - your frontend origin (optional, defaults to `*`)
+4. Railway auto-detects the Dockerfile or Nixpacks config
+5. The `start` command runs `node server/index.js`
+6. Railway injects `DATABASE_URL`, `REDIS_URL`, and `PORT` automatically
 
-- Move provider calls behind a backend proxy.
-- Store provider secrets server-side only.
-- Replace the test admin code with real auth and authorization.
-- Connect Google login and Discord role mapping.
-- Persist models, route configuration, cache policy, and changelog data in a database.
-- Validate direct video URLs server-side if admins can submit media links.
+## Environment variables
+
+| Variable                     | Default              | Description                         |
+|------------------------------|----------------------|-------------------------------------|
+| `PORT`                     | 3000                 | Server port (Railway injects this)  |
+| `RAZE_ADMIN_KEY`           | (empty, admin disabled) | Admin authentication key        |
+| `RAZE_DATA_DIR`            | .data                | Local JSON storage directory        |
+| `RAZE_PROVIDER_KEY`        | (none)               | Default provider API key            |
+| `RAZE_CORS_ORIGIN`         | *                    | Allowed CORS origin                 |
+| `RAZE_RATE_LIMIT_PER_MINUTE`| 60                  | Requests per minute per bucket      |
+| `RAZE_MAX_BODY_BYTES`      | 1000000              | Max request body size               |
+| `DATABASE_URL`             | (none)               | PostgreSQL connection string        |
+| `REDIS_URL`                | (none)               | Redis connection string             |
+
+## Security notes
+
+- Provider API keys are never stored in model config; they are stored in environment variables or the dedicated `raze_secrets` PostgreSQL table
+- User API keys are hashed with SHA-256; only fingerprints are shown in admin
+- Raw provider keys are detected and automatically migrated to safe secret names on startup
+- The `/health` endpoint returns no internal paths or configuration
+- Internal errors return a generic `internal_server_error` with no stack traces
+- Admin routes require the `RAZE_ADMIN_KEY` via `X-Admin-Key` header or `Authorization: Bearer` header
+- All admin-saved models and provider configs are validated and sanitized
 
 ## License
 
-Apache-2.0 intended for this repository.
+Apache-2.0

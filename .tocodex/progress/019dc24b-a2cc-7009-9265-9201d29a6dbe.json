@@ -1,0 +1,42 @@
+{
+  "taskId": "019dc24b-a2cc-7009-9265-9201d29a6dbe",
+  "todos": [
+    {
+      "id": "5c84c1b1032f18ad0fa947bd6385e18a",
+      "content": "Inspect backend implementation in [`server/index.js`](server/index.js:1) for OAuth, session gating, avatar storage, secret handling, CORS, rate limiting, and Railway readiness",
+      "status": "completed"
+    },
+    {
+      "id": "b9c92d0ddcf62ede441f0a520ebaa0bb",
+      "content": "Inspect frontend implementation in [`src/App.tsx`](src/App.tsx:1), [`src/api.ts`](src/api.ts:1), and release content in [`src/data/changelog.ts`](src/data/changelog.ts:1)",
+      "status": "completed"
+    },
+    {
+      "id": "f2e4ffe4d0dfaf2bb2ba700302e1148b",
+      "content": "Inspect deployment configuration in [`package.json`](package.json:1), [`Dockerfile`](Dockerfile:1), [`nixpacks.toml`](nixpacks.toml:1), and [`.env.example`](.env.example:1)",
+      "status": "completed"
+    },
+    {
+      "id": "33f24a1082569bfd7bed5f2a077d802a",
+      "content": "Produce a production-readiness gap analysis and final implementation plan",
+      "status": "completed"
+    },
+    {
+      "id": "892169da32b9e70e1f9b19476b705a8f",
+      "content": "Save the approved architecture and execution plan in [`.tocodex/plans/`](.tocodex/plans/)",
+      "status": "completed"
+    },
+    {
+      "id": "999743d3941bf012c70c8a8c3b4c86c3",
+      "content": "Switch to 💻 Code mode to implement and validate the required fixes",
+      "status": "in_progress"
+    },
+    {
+      "id": "ab4a1b963e73e82af7f3ce1cf50be5da",
+      "content": "After implementation, prepare Railway environment variable checklist and GitHub push steps",
+      "status": "pending"
+    }
+  ],
+  "lastUpdated": 1777081896234,
+  "status": "active"
+}
