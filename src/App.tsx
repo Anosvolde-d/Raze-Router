@@ -414,8 +414,30 @@ function Dashboard({ setView, openLogin, userApiKey, setUserApiKey, user, setUse
 }
 
 function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; selectedModel: Model; selectedModelId: string; setSelectedModelId: (id: string) => void; adminSection: AdminSection; setAdminSection: (tab: AdminSection) => void; updateModel: (patch: Partial<Model>) => void; addModel: () => void; saveConfig: () => void; saveSecret: (name: string, value: string) => void; syncState: string; toggleCapability: (cap: Capability) => void; refreshAdmin: () => void }) {
-  const { models, adminConfig, selectedModel, selectedModelId, setSelectedModelId, adminSection, setAdminSection, updateModel, addModel, saveConfig, saveSecret, syncState, toggleCapability, refreshAdmin } = props
-  const [aliasDraft, setAliasDraft] = useState(selectedModel.groups.join(', '))
+  const { models, adminConfig, selectedModel: rawModel, selectedModelId, setSelectedModelId, adminSection, setAdminSection, updateModel, addModel, saveConfig, saveSecret, syncState, toggleCapability, refreshAdmin } = props
+
+  // Defensively normalize every array/object field that might be missing when loaded from backend
+  const selectedModel: Model = {
+    ...rawModel,
+    capabilities: Array.isArray(rawModel.capabilities) ? rawModel.capabilities : [],
+    tags: Array.isArray(rawModel.tags) ? rawModel.tags : [],
+    groups: Array.isArray(rawModel.groups) ? rawModel.groups : [],
+    providerConfig: {
+      ...(rawModel.providerConfig || {}),
+      provider: rawModel.providerConfig?.provider ?? 'OpenAI Compatible',
+      modelId: rawModel.providerConfig?.modelId ?? '',
+      openAIBaseUrl: rawModel.providerConfig?.openAIBaseUrl ?? '',
+      anthropicEndpoint: rawModel.providerConfig?.anthropicEndpoint ?? '',
+      apiKeyLabel: rawModel.providerConfig?.apiKeyLabel ?? 'RAZE_PROVIDER_KEY',
+      cacheMode: rawModel.providerConfig?.cacheMode ?? 'Off',
+      cacheTtlSeconds: rawModel.providerConfig?.cacheTtlSeconds ?? 300,
+      cacheSystemPrompt: rawModel.providerConfig?.cacheSystemPrompt ?? true,
+      cacheTools: rawModel.providerConfig?.cacheTools ?? false,
+      cacheLargeContext: rawModel.providerConfig?.cacheLargeContext ?? true,
+    },
+  }
+
+  const [aliasDraft, setAliasDraft] = useState((selectedModel.groups || []).join(', '))
   const [secretValue, setSecretValue] = useState('')
 
   useEffect(() => {
