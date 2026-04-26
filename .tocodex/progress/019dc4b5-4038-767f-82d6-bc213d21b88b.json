@@ -42,11 +42,26 @@
       "status": "completed"
     },
     {
-      "id": "e5689fe03e4d1d2840da8e01c65dce59",
+      "id": "7108bb9b9407a732b4ecdd3096d8a495",
       "content": "Git push and Railway env var checklist",
-      "status": "in_progress"
+      "status": "completed"
+    },
+    {
+      "id": "ed46bc93803c4653a7437f08c5e84160",
+      "content": "Redesign the admin panel UX and model configuration flow",
+      "status": "completed"
+    },
+    {
+      "id": "b21bf1330ed1bfc1d227ef69ded84409",
+      "content": "Fix the playground request flow and validate end-to-end behavior",
+      "status": "completed"
+    },
+    {
+      "id": "33202e50c77c498eaca348529ba60419",
+      "content": "Rebuild and verify the frontend after the admin panel rewrite",
+      "status": "completed"
     }
   ],
-  "lastUpdated": 1777131821795,
+  "lastUpdated": 1777212789593,
   "status": "active"
 }
