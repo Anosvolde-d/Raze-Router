@@ -116,6 +116,21 @@ function App() {
     }).catch((error) => setSyncState(`local fallback: ${error.message}`))
   }, [])
 
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'm') {
+        event.preventDefault()
+        if (adminUnlocked) {
+          setView('Admin')
+        } else {
+          setAdminGateOpen(true)
+        }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [adminUnlocked])
+
   const selectedModel = models.find((model) => model.id === selectedModelId) ?? models[0]
   const featuredModels = models.filter((model) => model.featured && model.visibility !== 'Hidden')
 
@@ -219,7 +234,6 @@ function App() {
         <button className="wordmark ghost-button" onClick={() => setView('Landing')}>RAZE</button>
         <div className="nav-links">
           {views.map((item) => <button key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>{item}</button>)}
-          <button className={view === 'Admin' ? 'active' : ''} onClick={() => setAdminGateOpen(true)}>Admin</button>
         </div>
         <button className="profile-chip" onClick={() => setView('Dashboard')}>{user?.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span>{user?.username?.slice(0, 1) || '?'}</span>}</button>
         <button className="launch-btn" onClick={() => setLoginOpen(true)}><span /> {user ? 'Account' : 'Launch'}</button>
@@ -230,7 +244,8 @@ function App() {
         {view === 'Models' && <ModelsView filter={filter} setFilter={setFilter} sort={sort} setSort={setSort} visibleModels={visibleModels} copyId={copyId} copied={copied} />}
         {view === 'Playground' && <Playground models={visibleModels} userApiKey={userApiKey} error={playgroundError} setError={setPlaygroundError} />}
         {view === 'Dashboard' && <Dashboard setView={setView} openLogin={() => setLoginOpen(true)} userApiKey={userApiKey} setUserApiKey={setUserApiKey} user={user} setUser={setUser} logout={logout} />}
-        {view === 'Admin' && adminUnlocked && <AdminPanel models={models} adminConfig={adminConfig} selectedModel={selectedModel} selectedModelId={selectedModelId} setSelectedModelId={setSelectedModelId} adminSection={adminSection} setAdminSection={setAdminSection} updateModel={updateModel} addModel={addModel} saveConfig={saveConfig} saveSecret={saveSecret} syncState={syncState} toggleCapability={(cap) => toggleCapability(selectedModel, updateModel, cap)} refreshAdmin={refreshAdmin} />}
+        {view === 'Admin' && adminUnlocked && selectedModel && <AdminPanel models={models} adminConfig={adminConfig} selectedModel={selectedModel} selectedModelId={selectedModelId} setSelectedModelId={setSelectedModelId} adminSection={adminSection} setAdminSection={setAdminSection} updateModel={updateModel} addModel={addModel} saveConfig={saveConfig} saveSecret={saveSecret} syncState={syncState} toggleCapability={(cap) => toggleCapability(selectedModel, updateModel, cap)} refreshAdmin={refreshAdmin} />}
+        {view === 'Admin' && adminUnlocked && !selectedModel && <div style={{ padding: '60px 5vw' }}><p style={{ fontFamily: 'ui-monospace, monospace', fontSize: '.9rem' }}>Loading routes from backend…</p></div>}
         {view === 'Admin' && !adminUnlocked && <LockedAdmin openGate={() => setAdminGateOpen(true)} />}
         {view === 'Changelog' && <Changelog />}
         {view === 'Status' && <ControlCenter user={user} syncState={syncState} adminUnlocked={adminUnlocked} />}

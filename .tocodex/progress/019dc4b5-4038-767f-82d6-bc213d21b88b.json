@@ -47,21 +47,21 @@
       "status": "completed"
     },
     {
-      "id": "ed46bc93803c4653a7437f08c5e84160",
-      "content": "Redesign the admin panel UX and model configuration flow",
-      "status": "completed"
+      "id": "da5d46015fe9b1d58d542638e6a4b6ff",
+      "content": "Restore hidden Ctrl+M admin access and remove visible Admin nav button",
+      "status": "pending"
     },
     {
-      "id": "b21bf1330ed1bfc1d227ef69ded84409",
-      "content": "Fix the playground request flow and validate end-to-end behavior",
-      "status": "completed"
+      "id": "74c0c94a5f035a6e2219153e89cc4eb3",
+      "content": "Fix admin panel loading regression introduced during rewrite",
+      "status": "pending"
     },
     {
-      "id": "33202e50c77c498eaca348529ba60419",
-      "content": "Rebuild and verify the frontend after the admin panel rewrite",
-      "status": "completed"
+      "id": "839543bdbf63e00594233d86b1f1bd9d",
+      "content": "Rebuild, verify, and push the admin access fix",
+      "status": "pending"
     }
   ],
-  "lastUpdated": 1777212789593,
+  "lastUpdated": 1777213018383,
   "status": "active"
 }
