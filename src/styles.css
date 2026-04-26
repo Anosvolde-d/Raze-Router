@@ -425,10 +425,11 @@ button.danger:hover { background: #e11d48; color: #fff; box-shadow: 5px 5px 0 #9
   .terminal-card { min-height: 380px; }
   .kinetic-word { padding: 36px 0 24px; }
   .stats-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .toolbar, .split-heading, .password-row, .admin-inline-actions, .alias-chip, .avatar-dropzone, .top-nav { flex-direction: column; align-items: stretch; }
-  .top-nav-actions { width: 100%; justify-content: space-between; }
-  .launch-btn, .profile-chip { width: 100%; justify-content: center; }
-  .profile-chip { height: 48px; border-radius: 16px; }
+  .toolbar, .split-heading, .password-row, .admin-inline-actions, .alias-chip, .avatar-dropzone { flex-direction: column; align-items: stretch; }
+  .top-nav { flex-direction: row; align-items: center; padding: 8px 14px; }
+  .top-nav-actions { gap: 8px; }
+  .launch-btn { padding: 10px 14px; }
+  .profile-chip { width: 40px; height: 40px; flex-shrink: 0; }
   .dashboard-grid, .admin-grid, .admin-form-grid, .admin-toggle-grid, .admin-stats-grid, .release-grid { grid-template-columns: 1fr; }
   .dashboard-grid .wide-panel, .admin-card-span-2 { grid-column: span 1; }
   .admin-table { min-width: 640px; }
@@ -455,9 +456,10 @@ button.danger:hover { background: #e11d48; color: #fff; box-shadow: 5px 5px 0 #9
 
 @media (max-width: 480px) {
   .view-shell { padding: 28px 12px 42px; }
-  .top-nav { gap: 10px; padding: 10px; }
-  .wordmark { font-size: 1.1rem; }
-  .top-nav-actions { gap: 8px; }
+  .top-nav { gap: 8px; padding: 8px 10px; inset: 6px; }
+  .wordmark { font-size: 1.05rem; }
+  .top-nav-actions { gap: 6px; }
+  .launch-btn { padding: 8px 12px; font-size: .78rem; }
   .hero-actions button, .dashboard-actions button, .admin-actions button, .admin-inline-actions button { width: 100%; }
   .terminal-card { min-height: 320px; padding: 16px; }
   .stats-bar { grid-template-columns: 1fr; }
