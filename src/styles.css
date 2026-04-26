@@ -148,9 +148,9 @@ textarea, pre, code { overflow-wrap: anywhere; }
 
 .dashboard-section, .changelog-section { background: #050505; color: #f8f8f8; }
 .dashboard-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-.dashboard-grid article { background: #111; color: #f8f8f8; border-color: #333; }
-.dashboard-grid .wide-panel { grid-column: span 3; background: #f8f8f8; color: #050505; border-color: #f8f8f8; }
-.dashboard-grid span { font-weight: 1000; }
+.dashboard-grid article { background: #111; color: #f8f8f8; border: 3px solid #333; padding: 24px; box-shadow: 10px 10px 0 rgba(0, 0, 0, .22); }
+.dashboard-grid .wide-panel { grid-column: span 3; background: #f8f8f8; color: #050505; border: 3px solid var(--border); padding: 24px; box-shadow: 10px 10px 0 rgba(217, 221, 227, .18); }
+.dashboard-grid article > span { font-size: 1.1rem; font-weight: 800; display: block; margin-bottom: 4px; }
 
 .admin-section { background: #e9edf3; }
 .admin-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -236,9 +236,12 @@ button.danger:hover { background: #e11d48; color: #fff; box-shadow: 5px 5px 0 #9
 
 .control-section { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; background: #e7eaee; }
 .faq-list { display: grid; gap: 12px; }
-.faq-item { text-align: left; display: grid; gap: 12px; font-size: 1rem; }
-.status-panel { background: #050505; color: #f8f8f8; display: grid; gap: 14px; align-content: center; }
-.status-panel b { color: var(--green); font-size: 1.8rem; }
+.faq-item { text-align: left; display: grid; gap: 12px; font-size: 1rem; border-bottom: 1px solid var(--border); padding: 0 0 14px; }
+.faq-item:last-child { border-bottom: 0; padding-bottom: 0; }
+.status-panel { background: #050505; color: #f8f8f8; display: grid; gap: 14px; align-content: center; padding: 28px; border: 3px solid #111; min-height: 380px; box-shadow: 12px 12px 0 rgba(5,5,5,.14); }
+.status-panel span { border-bottom: 1px solid rgba(248,248,248,.15); padding-bottom: 14px; }
+.status-panel span:last-of-type { padding-bottom: 0; }
+.status-panel b { color: var(--green); font-size: 1.8rem; padding-top: 6px; }
 .release-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 .release-grid article { background: #111; color: #f8f8f8; border-color: #333; }
 .release-grid span { color: var(--green); font-family: ui-monospace, monospace; }
