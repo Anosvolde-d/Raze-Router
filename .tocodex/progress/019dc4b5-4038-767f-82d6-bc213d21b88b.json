@@ -47,21 +47,36 @@
       "status": "completed"
     },
     {
-      "id": "da5d46015fe9b1d58d542638e6a4b6ff",
+      "id": "4601fa91ef12ac442ec5eac708dac922",
       "content": "Restore hidden Ctrl+M admin access and remove visible Admin nav button",
-      "status": "pending"
+      "status": "completed"
     },
     {
-      "id": "74c0c94a5f035a6e2219153e89cc4eb3",
+      "id": "48a9eea87484928862ff70999b26ce87",
       "content": "Fix admin panel loading regression introduced during rewrite",
-      "status": "pending"
+      "status": "completed"
     },
     {
-      "id": "839543bdbf63e00594233d86b1f1bd9d",
+      "id": "1e23c705f507c4c4c4dc0a1df2f5e4af",
       "content": "Rebuild, verify, and push the admin access fix",
+      "status": "completed"
+    },
+    {
+      "id": "93b63810a573ae4464e4e39bae16350c",
+      "content": "Add model deletion support and practical route switching in the admin panel",
+      "status": "completed"
+    },
+    {
+      "id": "5add025bb2e19b81d22e9232e456882a",
+      "content": "Improve incidents/alerts to expose full error context for 502s and request failures",
+      "status": "completed"
+    },
+    {
+      "id": "38b506770d8fd20cb5004164478d326a",
+      "content": "Rebuild and push the admin UX and observability improvements",
       "status": "pending"
     }
   ],
-  "lastUpdated": 1777213018383,
+  "lastUpdated": 1777214660214,
   "status": "active"
 }

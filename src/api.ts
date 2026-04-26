@@ -143,3 +143,10 @@ export async function uploadAvatar(dataUrl: string): Promise<{ user: UserProfile
   }
   return data as { user: UserProfile }
 }
+
+export async function fetchAdminIncident(adminKey: string, code: string) {
+  return request<{ code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string; userKeyId?: string }>(
+    `/api/admin/incidents/${encodeURIComponent(code)}`,
+    { headers: { 'x-admin-key': adminKey } }
+  )
+}

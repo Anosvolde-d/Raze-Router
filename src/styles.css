@@ -212,6 +212,23 @@ label { display: grid; gap: 8px; font-weight: 800; }
 .admin-toggle.active { background: var(--black); color: #fff; }
 .admin-toggle small { color: inherit; text-transform: none; letter-spacing: 0; }
 .admin-inline-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.admin-quick-switcher { display: grid; gap: 6px; max-height: 260px; overflow-y: auto; }
+.admin-quick-switcher button { display: grid; grid-template-columns: 1fr; gap: 3px; border: 2px solid var(--border); padding: 10px 12px; background: #fff; text-align: left; }
+.admin-quick-switcher button b { font-size: .85rem; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-quick-switcher button span { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .68rem; color: #666; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-quick-switcher button.active { background: var(--black); color: #fff; }
+.admin-quick-switcher button.active span { color: #aaa; }
+button.danger { border: 2px solid #e11d48; background: #fff; color: #e11d48; padding: 12px 18px; font-weight: 900; }
+button.danger:hover { background: #e11d48; color: #fff; box-shadow: 5px 5px 0 #9f1239; transform: translateY(-2px); }
+.incident-card { border: 2px solid var(--border); padding: 14px; background: #f8f8f8; display: grid; gap: 6px; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+.incident-card:hover { background: #f0f0ff; border-color: var(--purple); }
+.incident-card.expanded { background: #fff; border-color: var(--border); cursor: default; }
+.incident-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.incident-card-code { font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 900; font-size: .9rem; color: #e11d48; }
+.incident-card-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+.incident-card-meta span { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; border: 1px solid #d9dde3; padding: 4px 8px; background: #fff; }
+.incident-card-upstream { margin-top: 10px; border: 2px solid var(--border); background: #050505; color: #05c48b; padding: 14px; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .72rem; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow-y: auto; }
+.incident-card-loading { color: #666; font-size: .82rem; font-family: ui-monospace, monospace; }
 .alias-list { display: grid; gap: 10px; }
 .alias-chip { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 2px solid var(--border); padding: 12px; background: #f8f8f8; }
 .alias-chip span, .alias-chip b { overflow-wrap: anywhere; }
