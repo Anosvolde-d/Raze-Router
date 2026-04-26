@@ -626,7 +626,16 @@ function tokenEstimateFromResponseText(text = '') {
 function createIncident(store, details) {
   const code = `RZ-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
   const incident = { code, at: new Date().toISOString(), ...details }
-  return { code, store: { ...store, incidents: [incident, ...(store.incidents || [])].slice(0, 200) } }
+  return { code, incident, store: { ...store, incidents: [incident, ...(store.incidents || [])].slice(0, 200) } }
+}
+
+async function writeIncidentAndRequestLog(incident, log) {
+  const store = await readStore()
+  await writeStore({
+    ...store,
+    incidents: [incident, ...(store.incidents || [])].slice(0, 200),
+    requestLogs: [{ id: crypto.randomUUID(), at: new Date().toISOString(), ...log, incidentCode: incident.code }, ...(store.requestLogs || [])].slice(0, 500)
+  })
 }
 
 function providerTarget(model, kind) {
@@ -954,8 +963,7 @@ async function proxyCompletion(req, res, kind) {
   } catch (error) {
     metrics.providerErrors += 1
     const incident = createIncident(await readStore(), { model: model.id, provider: provider.provider || 'OpenAI Compatible', status: 0, upstream: error instanceof Error ? error.message : 'provider_fetch_failed', userKeyId: auth.record.id })
-    scheduleBackground(() => writeStore(incident.store), { event: 'write_incident_store' })
-    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, incidentCode: incident.code }), { event: 'write_failed_request_log' })
+    scheduleBackground(() => writeIncidentAndRequestLog(incident.incident, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens }), { event: 'write_fetch_error_incident_log' })
     logEvent('error', 'provider_fetch_failed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, message: error instanceof Error ? error.message : 'unknown_error' })
     trackRequestMetrics(502, Date.now() - started)
     return sendJson(res, 502, { error: { message: `The router is unavailable for now. Error code ${incident.code}.`, type: 'router_unavailable', code: incident.code } })
@@ -965,8 +973,7 @@ async function proxyCompletion(req, res, kind) {
     metrics.providerErrors += 1
     const providerText = await upstream.text()
     const incident = createIncident(await readStore(), { model: model.id, provider: provider.provider || 'OpenAI Compatible', status: upstream.status, upstream: providerText.slice(0, 8000), userKeyId: auth.record.id })
-    scheduleBackground(() => writeStore(incident.store), { event: 'write_incident_store' })
-    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, incidentCode: incident.code }), { event: 'write_upstream_error_log' })
+    scheduleBackground(() => writeIncidentAndRequestLog(incident.incident, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens }), { event: 'write_upstream_error_incident_log' })
     logEvent('warn', 'provider_response_failed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, status: upstream.status })
     trackRequestMetrics(502, Date.now() - started)
     return sendJson(res, 502, { error: { message: `The router is unavailable for now. Error code ${incident.code}.`, type: 'router_unavailable', code: incident.code } })
@@ -1022,7 +1029,24 @@ async function handleAdmin(req, res, pathname) {
   if (req.method === 'GET' && pathname === '/api/admin/config') return sendJson(res, 200, adminStore(store))
   if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/admin/config') {
     const next = await readBody(req)
-    const saved = await normalizeStoreSecrets(sanitizeStoreInput({ ...store, ...next, audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'config_saved' }] }))
+    // When the admin frontend saves config it sends back the redacted store where sensitive
+    // URL fields are replaced with '[configured]'. We must not let those placeholders overwrite
+    // the real persisted values, so we restore them from the current store here.
+    const mergedModels = (next.models || store.models || []).map((incomingModel) => {
+      const existing = (store.models || []).find((m) => m.id === incomingModel.id)
+      if (!existing) return incomingModel
+      const pc = incomingModel.providerConfig || {}
+      return {
+        ...incomingModel,
+        providerConfig: {
+          ...pc,
+          apiKeyLabel: pc.apiKeyLabel || existing.providerConfig?.apiKeyLabel || 'RAZE_PROVIDER_KEY',
+          openAIBaseUrl: (pc.openAIBaseUrl === '[configured]' || pc.openAIBaseUrl === undefined) ? existing.providerConfig?.openAIBaseUrl || '' : pc.openAIBaseUrl,
+          anthropicEndpoint: (pc.anthropicEndpoint === '[configured]' || pc.anthropicEndpoint === undefined) ? existing.providerConfig?.anthropicEndpoint || '' : pc.anthropicEndpoint,
+        }
+      }
+    })
+    const saved = await normalizeStoreSecrets(sanitizeStoreInput({ ...store, ...next, models: mergedModels, audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'config_saved' }] }))
     await writeStore(saved)
     return sendJson(res, 200, adminStore(saved))
   }
