@@ -651,6 +651,14 @@ function sanitizeText(value, fallback = '') {
   return String(value ?? fallback).slice(0, 500)
 }
 
+function sanitizeProviderModelId(value) {
+  return String(value ?? '').replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 300)
+}
+
+function providerModelId(model) {
+  return sanitizeProviderModelId(model.providerConfig?.modelId)
+}
+
 function sanitizeUrl(value) {
   const text = String(value || '').trim()
   if (!text) return ''
@@ -685,7 +693,7 @@ function sanitizeModel(model) {
     sortPriority: Number(model.sortPriority || 999),
     providerConfig: {
       provider: ['OpenAI Compatible', 'Anthropic', 'Custom'].includes(providerConfig.provider) ? providerConfig.provider : 'OpenAI Compatible',
-      modelId: sanitizeText(providerConfig.modelId),
+      modelId: sanitizeProviderModelId(providerConfig.modelId),
       openAIBaseUrl: sanitizeUrl(providerConfig.openAIBaseUrl),
       anthropicEndpoint: sanitizeUrl(providerConfig.anthropicEndpoint),
       apiKeyLabel: isLikelyRawSecret(providerConfig.apiKeyLabel) ? providerConfig.apiKeyLabel : sanitizeText(providerConfig.apiKeyLabel || 'RAZE_PROVIDER_KEY').replace(/[^A-Z0-9_]/gi, '_').toUpperCase(),
@@ -738,9 +746,10 @@ async function saveProviderSecret(secretName, value) {
 
 function makeCacheKey(model, body) {
   const messages = body.messages || []
+  const upstreamModelId = providerModelId(model) || model.id
   const key = JSON.stringify({
     model: model.id,
-    providerModel: model.providerConfig?.modelId || model.id,
+    providerModel: upstreamModelId,
     messages,
     system: body.system,
     temperature: body.temperature,
@@ -924,6 +933,8 @@ async function proxyCompletion(req, res, kind) {
   }
 
   const provider = model.providerConfig || {}
+  const upstreamModelId = providerModelId(model)
+  if (!upstreamModelId) return sendJson(res, 500, { error: { message: `Missing provider model ID for route ${model.id}. Set the exact upstream model name in Admin provider settings.`, type: 'missing_provider_model' } })
   const secretName = provider.apiKeyLabel || 'RAZE_PROVIDER_KEY'
   const apiKey = await getProviderSecret(secretName)
   if (!apiKey) return sendJson(res, 500, { error: { message: 'Missing provider API key. Save it in Admin provider settings or configure the matching backend environment variable.', type: 'missing_provider_secret' } })
@@ -931,8 +942,8 @@ async function proxyCompletion(req, res, kind) {
   const isAnthropic = provider.provider === 'Anthropic' || kind === 'messages'
   const target = providerTarget(model, kind)
   const outbound = isAnthropic
-    ? anthropicMessagesFromOpenAi({ ...body, model: provider.modelId || model.id })
-    : { ...body, model: provider.modelId || model.id }
+    ? anthropicMessagesFromOpenAi({ ...body, model: upstreamModelId })
+    : { ...body, model: upstreamModelId }
   const headers = { 'content-type': 'application/json' }
   if (isAnthropic) {
     headers['x-api-key'] = apiKey
@@ -962,9 +973,9 @@ async function proxyCompletion(req, res, kind) {
     upstream = await fetch(target, { method: 'POST', headers, body: JSON.stringify(outbound) })
   } catch (error) {
     metrics.providerErrors += 1
-    const incident = createIncident(await readStore(), { model: model.id, provider: provider.provider || 'OpenAI Compatible', status: 0, upstream: error instanceof Error ? error.message : 'provider_fetch_failed', userKeyId: auth.record.id })
+    const incident = createIncident(await readStore(), { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', status: 0, upstream: error instanceof Error ? error.message : 'provider_fetch_failed', userKeyId: auth.record.id })
     scheduleBackground(() => writeIncidentAndRequestLog(incident.incident, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens }), { event: 'write_fetch_error_incident_log' })
-    logEvent('error', 'provider_fetch_failed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, message: error instanceof Error ? error.message : 'unknown_error' })
+    logEvent('error', 'provider_fetch_failed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, message: error instanceof Error ? error.message : 'unknown_error' })
     trackRequestMetrics(502, Date.now() - started)
     return sendJson(res, 502, { error: { message: `The router is unavailable for now. Error code ${incident.code}.`, type: 'router_unavailable', code: incident.code } })
   }
@@ -972,9 +983,9 @@ async function proxyCompletion(req, res, kind) {
   if (!upstream.ok) {
     metrics.providerErrors += 1
     const providerText = await upstream.text()
-    const incident = createIncident(await readStore(), { model: model.id, provider: provider.provider || 'OpenAI Compatible', status: upstream.status, upstream: providerText.slice(0, 8000), userKeyId: auth.record.id })
+    const incident = createIncident(await readStore(), { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', status: upstream.status, upstream: providerText.slice(0, 8000), userKeyId: auth.record.id })
     scheduleBackground(() => writeIncidentAndRequestLog(incident.incident, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens }), { event: 'write_upstream_error_incident_log' })
-    logEvent('warn', 'provider_response_failed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, status: upstream.status })
+    logEvent('warn', 'provider_response_failed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, status: upstream.status })
     trackRequestMetrics(502, Date.now() - started)
     return sendJson(res, 502, { error: { message: `The router is unavailable for now. Error code ${incident.code}.`, type: 'router_unavailable', code: incident.code } })
   }
@@ -987,14 +998,14 @@ async function proxyCompletion(req, res, kind) {
       const outputTokens = tokenEstimateFromResponseText(streamResult.text)
       checkTokenLimit(auth.record.id, outputTokens)
       scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 200, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, streamed: true }), { event: 'write_stream_log' })
-      logEvent('info', 'completion_streamed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: 200 })
+      logEvent('info', 'completion_streamed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: 200 })
       trackRequestMetrics(200, Date.now() - started)
       return
     }
 
     await pipeOpenAiStream(upstream, res, model.id, started)
     scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, streamed: true }), { event: 'write_stream_log' })
-    logEvent('info', 'completion_streamed', { model: model.id, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: upstream.status })
+    logEvent('info', 'completion_streamed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: upstream.status })
     trackRequestMetrics(upstream.status, Date.now() - started)
     return
   }
@@ -1009,7 +1020,7 @@ async function proxyCompletion(req, res, kind) {
   }
 
   scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens }), { event: 'write_request_log' })
-  logEvent('info', 'completion_finished', { model: model.id, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, cacheable: Boolean(cacheKey), streamed: false })
+  logEvent('info', 'completion_finished', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, cacheable: Boolean(cacheKey), streamed: false })
   trackRequestMetrics(upstream.status, Date.now() - started)
   res.writeHead(upstream.status, {
     ...corsHeaders(req),
@@ -1040,6 +1051,7 @@ async function handleAdmin(req, res, pathname) {
         ...incomingModel,
         providerConfig: {
           ...pc,
+          modelId: pc.modelId === undefined ? existing.providerConfig?.modelId || '' : pc.modelId,
           apiKeyLabel: pc.apiKeyLabel || existing.providerConfig?.apiKeyLabel || 'RAZE_PROVIDER_KEY',
           openAIBaseUrl: (pc.openAIBaseUrl === '[configured]' || pc.openAIBaseUrl === undefined) ? existing.providerConfig?.openAIBaseUrl || '' : pc.openAIBaseUrl,
           anthropicEndpoint: (pc.anthropicEndpoint === '[configured]' || pc.anthropicEndpoint === undefined) ? existing.providerConfig?.anthropicEndpoint || '' : pc.anthropicEndpoint,
@@ -1055,12 +1067,16 @@ async function handleAdmin(req, res, pathname) {
     const model = findRoute(store, modelId)
     if (!model) return sendJson(res, 404, { ok: false, error: 'model_not_found' })
     const secretName = model.providerConfig?.apiKeyLabel || 'RAZE_PROVIDER_KEY'
+    const secretPresent = Boolean(await getProviderSecret(secretName))
+    const upstreamModelId = providerModelId(model)
     return sendJson(res, 200, {
-      ok: Boolean(await getProviderSecret(secretName)),
+      ok: secretPresent && Boolean(upstreamModelId),
       model: model.id,
+      providerModel: upstreamModelId || null,
+      providerModelConfigured: Boolean(upstreamModelId),
       provider: model.providerConfig?.provider,
       secretName,
-      secretPresent: Boolean(await getProviderSecret(secretName)),
+      secretPresent,
       endpointConfigured: Boolean(providerTarget(model, 'chat'))
     })
   }
