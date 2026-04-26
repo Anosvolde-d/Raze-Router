@@ -2,6 +2,26 @@ import type { ChangelogEntry } from '../types'
 
 export const changelog: ChangelogEntry[] = [
   {
+    version: 'v0.4.1',
+    label: 'Mobile-ready + Rich playground',
+    date: '2026-04-26',
+    status: 'Live',
+    notes: [
+      'Full mobile and tablet responsive layout across all views',
+      'Adaptive breakpoints at 1200px, 1050px, 820px, 680px, 480px',
+      'Playground debug panel stacks below chat on mobile instead of overlapping',
+      'Nav collapses cleanly: wordmark + profile + launch button only on small screens',
+      'Hero, stats bar, model grid, admin panel all adapt to single-column on phone',
+      'Playground message renderer upgraded to full markdown with react-markdown',
+      'Fenced code blocks with language label and copy-to-clipboard button',
+      'Auto-wraps raw HTML/code in code fences before rendering',
+      'Thinking tag detection: <think>/<thinking> collapses into interactive section',
+      'Thinking section auto-closes when </think> or </thinking> is streamed',
+      'Admin quick-route switcher and route delete button',
+      'Incident click-to-expand with full upstream provider error context',
+    ],
+  },
+  {
     version: 'v0.4.0',
     label: 'Production router',
     date: '2026-04-25',

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import ReactMarkdown from 'react-markdown'
 import type { CacheMode, Capability, Model, ModelStatus, ProviderType, Visibility } from './types'
 import { capabilityDescriptions, createBlankModel, seedModels } from './data/models'
 import { changelog } from './data/changelog'
@@ -19,6 +20,7 @@ type IncidentDetail = { code: string; at: string; model?: string; provider?: str
 type PlaygroundMessage = { role: 'user' | 'assistant'; content: string }
 type PlaygroundAttachment = { name: string; type: string; dataUrl: string }
 type PlaygroundResponse = { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }
+type RenderSegment = { type: 'thinking' | 'markdown'; content: string; closed?: boolean }
 
 type AdminSection = 'Routes' | 'Aliases' | 'Accounts' | 'Request Logs'
 
@@ -78,6 +80,73 @@ function fingerprint(value?: string) {
 
 function normalizeAliasInput(value: string) {
   return splitList(value).map((alias) => alias.replace(/\s+/g, ' ').trim())
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char] || char))
+}
+
+function normalizeCodeFences(value: string) {
+  const lines = value.split('\n')
+  const normalized: string[] = []
+  let inFence = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (/^```/.test(trimmed)) {
+      inFence = !inFence
+      normalized.push(line)
+      continue
+    }
+
+    if (!inFence && /^\s*</.test(line) && /<\/?[a-z][\s\S]*>/i.test(trimmed)) {
+      normalized.push('```html')
+      normalized.push(line)
+      normalized.push('```')
+      continue
+    }
+
+    normalized.push(line)
+  }
+
+  return normalized.join('\n')
+}
+
+function parseThinkingSegments(value: string): RenderSegment[] {
+  const source = normalizeCodeFences(value)
+  const segments: RenderSegment[] = []
+  const openTag = /<(think|thinking)>/gi
+  const closeTag = /<\/(think|thinking)>/gi
+  let cursor = 0
+  let openMatch: RegExpExecArray | null
+
+  while ((openMatch = openTag.exec(source)) !== null) {
+    const plain = source.slice(cursor, openMatch.index)
+    if (plain.trim()) segments.push({ type: 'markdown', content: plain })
+
+    closeTag.lastIndex = openTag.lastIndex
+    const closeMatch = closeTag.exec(source)
+    if (closeMatch) {
+      const thinkingContent = source.slice(openTag.lastIndex, closeMatch.index)
+      segments.push({ type: 'thinking', content: thinkingContent, closed: true })
+      cursor = closeTag.lastIndex
+      openTag.lastIndex = cursor
+    } else {
+      const thinkingContent = source.slice(openTag.lastIndex)
+      segments.push({ type: 'thinking', content: thinkingContent, closed: false })
+      cursor = source.length
+      break
+    }
+  }
+
+  const trailing = source.slice(cursor)
+  if (trailing.trim()) segments.push({ type: 'markdown', content: trailing })
+  return segments.length ? segments : [{ type: 'markdown', content: source }]
+}
+
+function detectFenceLanguage(className?: string) {
+  const match = /language-([\w-]+)/.exec(className || '')
+  return match?.[1] || 'code'
 }
 
 function App() {
@@ -204,7 +273,7 @@ function App() {
 
   const deleteModel = () => {
     if (models.length <= 1) return
-    if (!window.confirm(`Delete route "${selectedModel.name || selectedModel.id}"? This cannot be undone.`)) return
+    if (!window.confirm(`Delete route \"${selectedModel.name || selectedModel.id}\"? This cannot be undone.`)) return
     const remaining = models.filter((model) => model.id !== selectedModelId)
     setModels(remaining)
     setSelectedModelId(remaining[0].id)
@@ -245,8 +314,10 @@ function App() {
         <div className="nav-links">
           {views.map((item) => <button key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>{item}</button>)}
         </div>
-        <button className="profile-chip" onClick={() => setView('Dashboard')}>{user?.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span>{user?.username?.slice(0, 1) || '?'}</span>}</button>
-        <button className="launch-btn" onClick={() => setLoginOpen(true)}><span /> {user ? 'Account' : 'Launch'}</button>
+        <div className="top-nav-actions">
+          <button className="profile-chip" onClick={() => setView('Dashboard')}>{user?.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span>{user?.username?.slice(0, 1) || '?'}</span>}</button>
+          <button className="launch-btn" onClick={() => setLoginOpen(true)}><span /> {user ? 'Account' : 'Launch'}</button>
+        </div>
       </nav>
 
       <main className="app-frame">
@@ -268,7 +339,7 @@ function App() {
 }
 
 function Landing({ setView, openLogin, models, focusedCard, setFocusedCard, copyId, copied, stats }: { setView: (view: View) => void; openLogin: () => void; models: Model[]; focusedCard: string | null; setFocusedCard: (id: string | null) => void; copyId: (id: string) => void; copied: string; stats: { modelCount: number; authMode: string; adminUnlocked: boolean; cacheModes: number; providerCount: number; access: string } }) {
-  return <section className="hero view-shell"><div className="hero-copy"><p className="eyebrow">secure ai router / admin-configured / community access</p><h1>RAZE Router, partially designed by me, then fully vibe coded 👍 cuz im lazy</h1><p className="hero-lede">RAZE is a production-ready AI router for model discovery, provider routing, exact-match caching, Google-authenticated access, and real-time streaming through a single OpenAI-style interface.</p><div className="hero-actions"><button className="primary" onClick={openLogin}>{'Sign in with Google'}</button><button className="secondary" onClick={() => setView('Playground')}>Open Playground</button><button className="secondary" onClick={() => setView('Models')}>Explore Models</button></div></div><TerminalHero /><StatsBar stats={stats} /><section className="showcase-panel"><div><p className="eyebrow">model.cards</p><h2>Configured by admins, rendered live.</h2><p>Cards use admin-defined metadata and stay aligned with the public registry without exposing provider secrets or internal endpoints.</p></div><div className="showcase-grid">{models.length ? models.map((model) => <ModelCard key={model.id} model={model} mode="showcase" focused={focusedCard === model.id} dimmed={Boolean(focusedCard && focusedCard !== model.id)} onFocus={setFocusedCard} onCopy={copyId} copied={copied === model.id} />) : <EmptyState title="No featured routes" body="Feature a model in Admin to show it here." />}</div></section></section>
+  return <section className="hero view-shell"><div className="hero-copy"><p className="eyebrow">secure ai router / admin-configured / community access</p><h1>RAZE Router v4.1 — production router, mobile-ready, and built for clean model access</h1><p className="hero-lede">RAZE is a production-ready AI router for model discovery, provider routing, exact-match caching, Google-authenticated access, and real-time streaming through a single OpenAI-style interface.</p><div className="hero-actions"><button className="primary" onClick={openLogin}>{'Sign in with Google'}</button><button className="secondary" onClick={() => setView('Playground')}>Open Playground</button><button className="secondary" onClick={() => setView('Models')}>Explore Models</button></div></div><TerminalHero /><StatsBar stats={stats} /><section className="showcase-panel"><div><p className="eyebrow">model.cards</p><h2>Configured by admins, rendered live.</h2><p>Cards use admin-defined metadata and stay aligned with the public registry without exposing provider secrets or internal endpoints.</p></div><div className="showcase-grid">{models.length ? models.map((model) => <ModelCard key={model.id} model={model} mode="showcase" focused={focusedCard === model.id} dimmed={Boolean(focusedCard && focusedCard !== model.id)} onFocus={setFocusedCard} onCopy={copyId} copied={copied === model.id} />) : <EmptyState title="No featured routes" body="Feature a model in Admin to show it here." />}</div></section></section>
 }
 
 function TerminalHero() {
@@ -304,9 +375,22 @@ function CapabilityIcon({ capability }: { capability: Capability }) {
   return <span className="cap-icon material-symbols-rounded" aria-label={capability}>{capabilityIcons[capability]}<em>{capability}: {capabilityDescriptions[capability]}</em></span>
 }
 
-function renderLiteMarkdown(value: string) {
-  const escaped = value.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char] || char))
-  return escaped.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br />')
+function CodeBlockShell({ className, children }: { className?: string; children?: ReactNode }) {
+  const value = String(children || '').replace(/\n$/, '')
+  return <div className="playground-code-shell"><div className="playground-code-toolbar"><span>{detectFenceLanguage(className)}</span><button type="button" className="playground-copy-btn" onClick={() => navigator.clipboard?.writeText(value)}>Copy</button></div><pre><code className={className}>{value}</code></pre></div>
+}
+
+function MarkdownBlock({ content }: { content: string }) {
+  return <div className="playground-markdown"><ReactMarkdown components={{ pre: ({ children }) => <>{children}</>, code: ({ className, children }) => { const isBlock = Boolean(className); if (isBlock) return <CodeBlockShell className={className}>{children}</CodeBlockShell>; return <code>{children}</code> } }}>{content}</ReactMarkdown></div>
+}
+
+function ThinkingBlock({ content, closed }: { content: string; closed?: boolean }) {
+  return <details className="thinking-block" open={!closed}><summary>{closed ? 'Thinking hidden' : 'Thinking…'}</summary><div className="thinking-block-body"><MarkdownBlock content={content.trim() || '_No reasoning text yet._'} /></div></details>
+}
+
+function MessageContent({ content }: { content: string }) {
+  const segments = useMemo(() => parseThinkingSegments(content), [content])
+  return <div className="playground-rendered">{segments.map((segment, index) => segment.type === 'thinking' ? <ThinkingBlock key={`thinking-${index}`} content={segment.content} closed={segment.closed} /> : <MarkdownBlock key={`markdown-${index}`} content={segment.content} />)}</div>
 }
 
 function Playground({ models, userApiKey, error, setError }: { models: Model[]; userApiKey: string; error: string; setError: (value: string) => void }) {
@@ -316,7 +400,7 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
   const [result, setResult] = useState('No request sent yet.')
   const [messages, setMessages] = useState<PlaygroundMessage[]>([])
   const [attachments, setAttachments] = useState<PlaygroundAttachment[]>([])
-  const [debugOpen, setDebugOpen] = useState(true)
+  const [debugOpen, setDebugOpen] = useState(window.innerWidth > 900)
   const [pending, setPending] = useState(false)
   const model = models.find((item) => item.id === modelId) ?? models[0]
 
@@ -376,9 +460,9 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
     }
   }
 
-  return <section className="playground-shell"><header className="playground-topbar"><div className="playground-topbar-left"><span className="playground-badge">Chat</span><div className="playground-title-group"><div className="playground-title-main">RAZE Conversation</div><div className="playground-title-sub">{model?.name || 'No route selected'}</div></div></div><div className="playground-topbar-right"><span className={`playground-status ${model?.status === 'Online' ? 'online' : ''}`}>{model?.status || 'No model'}</span><button className="playground-ghost" onClick={() => setDebugOpen((value) => !value)}>Safe Debug</button></div></header><div className="playground-workspace"><main className="playground-chat-panel"><div className="playground-config"><div className="playground-field-row"><label className="playground-field-label">Route</label><select value={modelId} onChange={(event) => setModelId(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="playground-field-row"><label className="playground-field-label">System</label><textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} placeholder="System prompt" /></div>{error ? <div className="playground-alert">{error}</div> : null}</div><div className="playground-chat-stream">{messages.length ? messages.map((message, index) => <article key={index} className={`playground-message ${message.role}`}><span>{message.role}</span><div dangerouslySetInnerHTML={{ __html: renderLiteMarkdown(message.content) }} /></article>) : <div className="playground-empty"><div className="playground-empty-icon">□</div><span>No messages yet.</span></div>}</div><div className="playground-composer"><div className="playground-composer-box"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !pending) { event.preventDefault(); submit() } }} placeholder="Type your prompt..." /><div className="playground-composer-actions"><label className="playground-icon-btn" title="Attach files">＋
+  return <section className="playground-shell"><header className="playground-topbar"><div className="playground-topbar-left"><span className="playground-badge">Chat</span><div className="playground-title-group"><div className="playground-title-main">RAZE Conversation</div><div className="playground-title-sub">{model?.name || 'No route selected'}</div></div></div><div className="playground-topbar-right"><span className={`playground-status ${model?.status === 'Online' ? 'online' : ''}`}>{model?.status || 'No model'}</span><button className="playground-ghost" onClick={() => setDebugOpen((value) => !value)}>{debugOpen ? 'Hide Debug' : 'Safe Debug'}</button></div></header><div className="playground-workspace"><main className="playground-chat-panel"><div className="playground-config"><div className="playground-field-row"><label className="playground-field-label">Route</label><select value={modelId} onChange={(event) => setModelId(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="playground-field-row"><label className="playground-field-label">System</label><textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} placeholder="System prompt" /></div>{error ? <div className="playground-alert">{error}</div> : null}</div><div className="playground-chat-stream">{messages.length ? messages.map((message, index) => <article key={index} className={`playground-message ${message.role}`}><span>{message.role}</span><MessageContent content={message.content} /></article>) : <div className="playground-empty"><div className="playground-empty-icon">□</div><span>No messages yet.</span></div>}</div><div className="playground-composer"><div className="playground-composer-box"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !pending) { event.preventDefault(); submit() } }} placeholder="Type your prompt..." /><div className="playground-composer-actions"><label className="playground-icon-btn" title="Attach files">＋
             <input type="file" multiple onChange={(event) => attachFiles(event.target.files)} />
-          </label><button className="playground-icon-btn send" onClick={submit} disabled={pending}>{pending ? '…' : '↑'}</button></div></div>{attachments.length ? <div className="playground-attachments">{attachments.map((file) => <span key={file.name}>{file.name}</span>)}</div> : null}<div className="playground-composer-hint"><span>{userApiKey ? 'Bearer key loaded from dashboard' : 'No bearer key loaded'}</span><span>{pending ? 'Sending…' : 'Enter to send · Shift+Enter for newline'}</span></div></div></main><aside className={`playground-debug-panel ${debugOpen ? '' : 'hidden'}`}><div className="playground-debug-header"><span>Safe Debug</span><span>{model?.id || 'no-model'}</span></div><div className="playground-debug-body"><div><div className="playground-debug-title">Request preview</div><pre className="playground-code-block">{JSON.stringify(requestPreview, null, 2)}</pre></div><div><div className="playground-debug-title">Response</div><pre className="playground-code-block">{result}</pre></div></div></aside></div></section>
+          </label><button className="playground-icon-btn send" onClick={submit} disabled={pending}>{pending ? '…' : '↑'}</button></div></div>{attachments.length ? <div className="playground-attachments">{attachments.map((file) => <span key={file.name}>{file.name}</span>)}</div> : null}<div className="playground-composer-hint"><span>{userApiKey ? 'Bearer key loaded from dashboard' : 'No bearer key loaded'}</span><span>{pending ? 'Sending…' : 'Enter to send · Shift+Enter for newline'}</span></div></div></main><aside className={`playground-debug-panel ${debugOpen ? '' : 'hidden'}`}><div className="playground-debug-header"><span>Safe Debug</span><span>{model?.id || 'no-model'}</span></div><div className="playground-debug-body"><div><div className="playground-debug-title">Request preview</div><pre className="playground-code-block">{JSON.stringify(requestPreview, null, 2)}</pre></div><div><div className="playground-debug-title">Response</div><pre className="playground-code-block response">{result}</pre></div></div></aside></div></section>
 }
 
 function Dashboard({ setView, openLogin, userApiKey, setUserApiKey, user, setUser, logout }: { setView: (view: View) => void; openLogin: () => void; userApiKey: string; setUserApiKey: (value: string) => void; user: UserProfile | null; setUser: (user: UserProfile) => void; logout: () => void }) {
