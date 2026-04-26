@@ -6,7 +6,7 @@ RAZE is completely free for everyone. No subscriptions, billing, paid plans, upg
 
 ## Current version
 
-`0.4.0`
+`0.4.1`
 
 ## Architecture
 
