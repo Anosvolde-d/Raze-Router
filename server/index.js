@@ -1159,9 +1159,23 @@ const server = createServer(async (req, res) => {
       const session = authenticateSession(req, store)
       if (!session || session.user.authMethod !== 'google' || !session.user.emailVerified) return sendJson(res, 401, { error: { message: 'Sign in with Google before generating an API key.', type: 'google_session_required' } })
       const body = await readBody(req)
+      // Deactivate all existing keys for this user so only one active key exists at a time
+      const deactivated = (store.userKeys || []).map((k) => k.userId === session.user.id ? { ...k, active: false } : k)
       const key = createUserKeyForUser(session.user.id, body.label || 'Dashboard key')
-      await writeStore({ ...store, userKeys: [persistableUserKey(key), ...(store.userKeys || [])] })
+      await writeStore({ ...store, userKeys: [persistableUserKey(key), ...deactivated] })
       return sendJson(res, 200, key)
+    }
+    if (pathname.startsWith('/api/keys/') && req.method === 'DELETE') {
+      const keyId = pathname.split('/').pop()
+      const store = await readStore()
+      const session = authenticateSession(req, store)
+      if (!session) return sendJson(res, 401, { error: { message: 'Session required.', type: 'session_required' } })
+      const target = (store.userKeys || []).find((k) => k.id === keyId)
+      if (!target) return sendJson(res, 404, { error: { message: 'Key not found.', type: 'key_not_found' } })
+      if (target.userId !== session.user.id) return sendJson(res, 403, { error: { message: 'You can only delete your own keys.', type: 'forbidden' } })
+      const saved = { ...store, userKeys: (store.userKeys || []).map((k) => k.id === keyId ? { ...k, active: false } : k) }
+      await writeStore(saved)
+      return sendJson(res, 200, { ok: true })
     }
     if ((pathname === '/v1/chat/completions' || pathname === '/chat/completions') && req.method === 'POST') return proxyCompletion(req, res, 'chat')
     if (pathname === '/v1/messages' && req.method === 'POST') return proxyCompletion(req, res, 'messages')

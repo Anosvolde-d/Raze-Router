@@ -393,6 +393,13 @@ button.danger:hover { background: #e11d48; color: #fff; box-shadow: 5px 5px 0 #9
 
 .dashboard-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 
+.dashboard-account-panel p, .dashboard-avatar-panel p, .dashboard-key-panel p { margin: 8px 0 0; }
+.dashboard-key-shell { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 8px; }
+.dashboard-key-readout { border: 2px solid var(--border); background: #f8f8f8; padding: 14px; overflow-x: auto; min-height: 48px; display: flex; align-items: center; }
+.dashboard-key-readout code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .8rem; letter-spacing: .04em; text-transform: none; overflow-wrap: anywhere; word-break: break-all; }
+.dashboard-key-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.dashboard-key-actions button { flex: 1; min-width: 120px; }
+
 @media (max-width: 1200px) {
   .showcase-grid, .model-grid { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
   .hero { gap: 28px; }
