@@ -565,6 +565,8 @@ function flattenMessageContent(content) {
     return content.map((item) => {
       if (typeof item === 'string') return item
       if (item?.type === 'text') return item.text || ''
+      if (item?.type === 'image_url') return `[image:${item?.image_url?.url ? 'attached' : 'missing'}]`
+      if (item?.type === 'file') return `[file:${item?.file?.name || 'attachment'}]`
       return JSON.stringify(item)
     }).join('\n')
   }
@@ -775,13 +777,20 @@ function anthropicMessagesFromOpenAi(body) {
   const systemChunks = []
   const anthropicMessages = []
   for (const message of messages) {
-    const content = flattenMessageContent(message.content)
     if (message.role === 'system') {
+      const content = flattenMessageContent(message.content)
       if (content) systemChunks.push(content)
       continue
     }
     const role = message.role === 'assistant' ? 'assistant' : 'user'
-    anthropicMessages.push({ role, content: [{ type: 'text', text: content }] })
+    const normalizedContent = Array.isArray(message.content)
+      ? message.content.map((item) => {
+        if (item?.type === 'text') return { type: 'text', text: item.text || '' }
+        if (item?.type === 'image_url') return { type: 'image', source: { type: 'base64', media_type: String(item?.image_url?.url || '').match(/^data:([^;]+);base64,/)?.[1] || 'image/png', data: String(item?.image_url?.url || '').split(',')[1] || '' } }
+        return { type: 'text', text: item?.type === 'file' ? `[file attachment: ${item?.file?.name || 'attachment'}]` : flattenMessageContent(item) }
+      }).filter((item) => !(item.type === 'image' && !item.source.data))
+      : [{ type: 'text', text: flattenMessageContent(message.content) }]
+    anthropicMessages.push({ role, content: normalizedContent.length ? normalizedContent : [{ type: 'text', text: '' }] })
   }
   return {
     model: body.model,
