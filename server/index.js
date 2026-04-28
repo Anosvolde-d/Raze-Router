@@ -50,6 +50,7 @@ const googleClientId = process.env.GOOGLE_CLIENT_ID || ''
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
 const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI || ''
 const corsOrigin = (process.env.RAZE_CORS_ORIGIN || '').trim()
+const corsOrigins = corsOrigin.split(',').map((origin) => origin.trim().replace(/\/$/, '')).filter(Boolean)
 let pgPool
 let redisClient
 let warnedAboutCors = false
@@ -464,29 +465,45 @@ async function writeRedisStore(store) {
 }
 
 function sendJson(res, status, body, extraHeaders = {}) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...corsHeaders(), ...extraHeaders })
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...corsHeaders(res.razeReq, { publicApi: res.razeCorsPublic }), ...extraHeaders })
   res.end(JSON.stringify(body))
 }
 
-function corsHeaders(req) {
-  const requestOrigin = req?.headers?.origin || ''
-  if (!corsOrigin) {
-    if (!warnedAboutCors) {
-      warnedAboutCors = true
-      logEvent('warn', 'cors_origin_missing', { message: 'RAZE_CORS_ORIGIN is not set. Browser cross-origin requests are denied by default.' })
-    }
-    return {
-      'access-control-allow-origin': 'null',
-      'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-      'access-control-allow-headers': 'Content-Type,Authorization,X-Admin-Key,X-Session-Token,X-Api-Key'
-    }
+function isOpenAiCompatiblePath(pathname) {
+  return pathname === '/v1' || pathname === '/v1/' || pathname.startsWith('/v1/') || pathname === '/chat/completions'
+}
+
+function corsHeaders(req, options = {}) {
+  const requestOrigin = String(req?.headers?.origin || '').replace(/\/$/, '')
+  const requestedHeaders = req?.headers?.['access-control-request-headers']
+  const publicApi = Boolean(options.publicApi)
+  const allowAnyConfigured = corsOrigins.includes('*')
+  const configuredMatch = requestOrigin && corsOrigins.includes(requestOrigin)
+  const shouldReflectOrigin = requestOrigin && (publicApi || allowAnyConfigured || configuredMatch)
+
+  if (!corsOrigin && !publicApi && !warnedAboutCors) {
+    warnedAboutCors = true
+    logEvent('warn', 'cors_origin_missing', { message: 'RAZE_CORS_ORIGIN is not set. Non-OpenAI browser routes are denied by default.' })
   }
-  const allowedOrigin = requestOrigin && requestOrigin === corsOrigin ? requestOrigin : corsOrigin
-  return {
+
+  const allowedOrigin = shouldReflectOrigin
+    ? requestOrigin
+    : allowAnyConfigured
+      ? '*'
+      : corsOrigins[0] || (publicApi ? '*' : 'null')
+
+  const headers = {
     'access-control-allow-origin': allowedOrigin,
     'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-    'access-control-allow-headers': 'Content-Type,Authorization,X-Admin-Key,X-Session-Token,X-Api-Key'
+    'access-control-allow-headers': requestedHeaders || 'Accept,Authorization,Content-Type,HTTP-Referer,OpenAI-Organization,OpenAI-Project,X-Admin-Key,X-Api-Key,X-Requested-With,X-Session-Token,X-Title,anthropic-version',
+    'access-control-expose-headers': 'x-raze-cache,x-raze-latency-ms,x-raze-route',
+    'access-control-allow-credentials': 'true',
+    'access-control-max-age': '86400',
+    vary: 'Origin, Access-Control-Request-Headers, Access-Control-Request-Method'
   }
+
+  if (req?.headers?.['access-control-request-private-network'] === 'true') headers['access-control-allow-private-network'] = 'true'
+  return headers
 }
 
 function readBody(req) {
@@ -852,7 +869,7 @@ async function streamAnthropicAsOpenAi(upstream, res, modelId, routeId, startedA
   const responseId = `chatcmpl_${crypto.randomUUID()}`
 
   res.writeHead(200, {
-    ...corsHeaders(),
+    ...corsHeaders(res.razeReq, { publicApi: res.razeCorsPublic }),
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
     connection: 'keep-alive',
@@ -896,7 +913,7 @@ async function streamAnthropicAsOpenAi(upstream, res, modelId, routeId, startedA
 
 async function pipeOpenAiStream(upstream, res, routeId, startedAt) {
   res.writeHead(upstream.status, {
-    ...corsHeaders(),
+    ...corsHeaders(res.razeReq, { publicApi: res.razeCorsPublic }),
     'content-type': upstream.headers.get('content-type') || 'text/event-stream; charset=utf-8',
     'cache-control': upstream.headers.get('cache-control') || 'no-cache, no-transform',
     connection: 'keep-alive',
@@ -1023,7 +1040,7 @@ async function proxyCompletion(req, res, kind) {
   logEvent('info', 'completion_finished', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, cacheable: Boolean(cacheKey), streamed: false })
   trackRequestMetrics(upstream.status, Date.now() - started)
   res.writeHead(upstream.status, {
-    ...corsHeaders(req),
+    ...corsHeaders(req, { publicApi: res.razeCorsPublic }),
     'content-type': 'application/json; charset=utf-8',
     'x-raze-route': model.id,
     'x-raze-latency-ms': String(Date.now() - started),
@@ -1154,13 +1171,15 @@ async function serveStatic(req, res, pathname) {
 
 const server = createServer(async (req, res) => {
   try {
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, corsHeaders(req))
-      return res.end()
-    }
-
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
     const pathname = url.pathname
+    res.razeReq = req
+    res.razeCorsPublic = isOpenAiCompatiblePath(pathname)
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, corsHeaders(req, { publicApi: res.razeCorsPublic }))
+      return res.end()
+    }
 
     if (pathname === '/health') return sendJson(res, 200, { ok: true, service: 'raze' })
     if (pathname === '/metrics' && req.method === 'GET') {
