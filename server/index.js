@@ -473,6 +473,10 @@ function isOpenAiCompatiblePath(pathname) {
   return pathname === '/v1' || pathname === '/v1/' || pathname.startsWith('/v1/') || pathname === '/chat/completions'
 }
 
+function isOpenAiBasePath(pathname) {
+  return pathname === '/v1' || pathname === '/v1/'
+}
+
 function corsHeaders(req, options = {}) {
   const requestOrigin = String(req?.headers?.origin || '').replace(/\/$/, '')
   const requestedHeaders = req?.headers?.['access-control-request-headers']
@@ -1190,6 +1194,8 @@ const server = createServer(async (req, res) => {
     if (pathname === '/api/auth/google' && req.method === 'GET') return startGoogleAuth(req, res)
     if (pathname === '/auth' && req.method === 'GET') return completeGoogleAuth(req, res, url)
     if (pathname === '/api/config' && req.method === 'GET') return sendJson(res, 200, { models: publicModels(await readStore()) })
+    if (isOpenAiBasePath(pathname) && req.method === 'GET') return sendJson(res, 200, { ok: true, service: 'raze', object: 'api', endpoints: { models: '/v1/models', chat_completions: '/v1/chat/completions' } }, { 'cache-control': 'no-store' })
+    if (isOpenAiBasePath(pathname) && req.method === 'POST') return proxyCompletion(req, res, 'chat')
     if (pathname === '/v1/models' && req.method === 'GET') return sendJson(res, 200, openAiModelList(await readStore()))
     if (pathname === '/api/session' && req.method === 'GET') {
       const store = await readStore()
@@ -1248,6 +1254,7 @@ const server = createServer(async (req, res) => {
     if ((pathname === '/v1/chat/completions' || pathname === '/chat/completions') && req.method === 'POST') return proxyCompletion(req, res, 'chat')
     if (pathname === '/v1/messages' && req.method === 'POST') return proxyCompletion(req, res, 'messages')
     if (pathname.startsWith('/api/admin/')) return handleAdmin(req, res, pathname)
+    if (res.razeCorsPublic) return sendJson(res, 404, { error: { message: 'Unknown OpenAI-compatible endpoint. Use /v1 as the base URL or /v1/chat/completions for direct requests.', type: 'not_found' } })
 
     return serveStatic(req, res, pathname)
   } catch (error) {
