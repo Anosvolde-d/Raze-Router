@@ -247,6 +247,10 @@ button.danger:hover { background: #e11d48; color: #fff; box-shadow: 5px 5px 0 #9
 .admin-table td b, .admin-table td small, .admin-table td code { display: block; }
 .admin-table td small { margin-top: 4px; color: #666; text-transform: none; letter-spacing: 0; }
 .key-limit-table input { min-width: 92px; padding: 9px 10px; }
+.key-default-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 12px; margin: 12px 0; }
+.key-default-grid label { display: grid; gap: 8px; }
+.table-action { padding: 8px 10px; font-size: .72rem; }
+button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
 .verified-email-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
 .verified-email-form input { flex: 1; min-width: 240px; }
 .verified-email-form button { white-space: nowrap; }
@@ -715,7 +719,7 @@ button.danger:hover { background: #e11d48; color: #fff; box-shadow: 5px 5px 0 #9
   .top-nav-actions { gap: 8px; }
   .launch-btn { padding: 10px 14px; }
   .profile-chip { width: 40px; height: 40px; flex-shrink: 0; }
-  .dashboard-grid, .admin-grid, .admin-form-grid, .admin-toggle-grid, .admin-stats-grid, .release-grid { grid-template-columns: 1fr; }
+  .dashboard-grid, .admin-grid, .admin-form-grid, .admin-toggle-grid, .admin-stats-grid, .key-default-grid, .release-grid { grid-template-columns: 1fr; }
   .dashboard-grid .wide-panel, .admin-card-span-2 { grid-column: span 1; }
   .admin-table { min-width: 640px; }
   .playground-topbar { padding: 12px 16px; align-items: flex-start; }
@@ -732,7 +736,7 @@ button.danger:hover { background: #e11d48; color: #fff; box-shadow: 5px 5px 0 #9
   .playground-shell { height: calc(100dvh - 76px - env(safe-area-inset-top)); min-height: calc(100dvh - 76px - env(safe-area-inset-top)); }
   .top-nav { inset: calc(env(safe-area-inset-top) + 8px) 8px auto; }
   h1 { font-size: clamp(2.4rem, 12vw, 3.7rem); }
-  .stats-bar, .model-grid, .showcase-grid, .dashboard-grid, .release-grid, .admin-grid, .admin-form-grid, .admin-toggle-grid, .admin-stats-grid { grid-template-columns: 1fr; }
+  .stats-bar, .model-grid, .showcase-grid, .dashboard-grid, .release-grid, .admin-grid, .admin-form-grid, .admin-toggle-grid, .admin-stats-grid, .key-default-grid { grid-template-columns: 1fr; }
   .dashboard-grid .wide-panel, .admin-card-span-2 { grid-column: span 1; }
   .admin-table { min-width: 560px; }
   .playground-topbar-left, .playground-topbar-right, .playground-field-row, .playground-composer-hint { width: 100%; }

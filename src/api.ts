@@ -7,6 +7,7 @@ export type StoreConfig = {
   models: Model[]
   users?: UserProfile[]
   verifiedEmails?: string[]
+  keyDefaults?: { rpmLimit?: number; rpdLimit?: number }
   userKeys?: UserKeyConfig[]
   requestLogs?: RequestLogEntry[]
   incidents?: Array<{ code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string | null; userKeyId?: string }>
@@ -155,6 +156,34 @@ export async function createAdminUserApiKey(adminKey: string, label = 'Admin-cre
     method: 'POST',
     headers: { 'x-admin-key': adminKey },
     body: JSON.stringify({ label }),
+  })
+}
+
+export async function deleteAdminUser(adminKey: string, userId: string) {
+  return request<StoreConfig>(`/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+    headers: { 'x-admin-key': adminKey },
+  })
+}
+
+export async function deleteAllAdminUsers(adminKey: string) {
+  return request<StoreConfig>('/api/admin/users', {
+    method: 'DELETE',
+    headers: { 'x-admin-key': adminKey },
+  })
+}
+
+export async function deleteAdminUserKey(adminKey: string, keyId: string) {
+  return request<StoreConfig>(`/api/admin/keys/${encodeURIComponent(keyId)}`, {
+    method: 'DELETE',
+    headers: { 'x-admin-key': adminKey },
+  })
+}
+
+export async function deleteAllAdminUserKeys(adminKey: string) {
+  return request<StoreConfig>('/api/admin/keys', {
+    method: 'DELETE',
+    headers: { 'x-admin-key': adminKey },
   })
 }
 

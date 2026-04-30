@@ -72,6 +72,7 @@ const defaultStore = {
   audit: [],
   users: [],
   verifiedEmails: [],
+  keyDefaults: { rpmLimit: maxRequestsPerMinute, rpdLimit: maxRequestsPerDay },
   sessions: [],
   userKeys: [],
   requestLogs: [],
@@ -176,8 +177,9 @@ async function normalizeStoreSecrets(store) {
     models,
     users: store.users || [],
     verifiedEmails: normalizeVerifiedEmails(store.verifiedEmails || []),
+    keyDefaults: normalizeKeyDefaults(store.keyDefaults || {}),
     sessions: store.sessions || [],
-    userKeys: normalizeUserKeys(store.userKeys || []),
+    userKeys: normalizeUserKeys(store.userKeys || [], store.keyDefaults || {}),
     requestLogs: store.requestLogs || [],
     incidents: store.incidents || [],
     oauthStates: store.oauthStates || []
@@ -226,15 +228,23 @@ function verificationSecret() {
   return String(process.env['MAIL-VERIFICATION-PASS'] || process.env.MAIL_VERIFICATION_PASS || '')
 }
 
-function normalizeUserKeys(keys = []) {
+function normalizeKeyDefaults(defaults = {}) {
+  return {
+    rpmLimit: normalizeLimit(defaults.rpmLimit, maxRequestsPerMinute),
+    rpdLimit: normalizeLimit(defaults.rpdLimit, maxRequestsPerDay)
+  }
+}
+
+function normalizeUserKeys(keys = [], defaults = {}) {
+  const keyDefaults = normalizeKeyDefaults(defaults)
   return keys.map((item) => {
     const keyHash = item.keyHash || (item.key ? hashApiKey(item.key) : undefined)
     return {
       ...item,
       keyHash,
       fingerprint: item.fingerprint || (item.key ? keyFingerprint(item.key) : undefined),
-      rpmLimit: normalizeLimit(item.rpmLimit, maxRequestsPerMinute),
-      rpdLimit: normalizeLimit(item.rpdLimit, maxRequestsPerDay),
+      rpmLimit: normalizeLimit(item.rpmLimit, keyDefaults.rpmLimit),
+      rpdLimit: normalizeLimit(item.rpdLimit, keyDefaults.rpdLimit),
       key: undefined
     }
   })
@@ -414,6 +424,7 @@ function adminStore(store) {
   return {
     ...redactStore(store),
     verifiedEmails: normalizeVerifiedEmails(store.verifiedEmails || []),
+    keyDefaults: normalizeKeyDefaults(store.keyDefaults || {}),
     userKeys: (store.userKeys || []).map((key) => ({ ...key, keyHash: undefined, key: key.fingerprint || 'stored securely' })),
     sessions: undefined,
     users: store.users || [],
@@ -659,13 +670,14 @@ async function authenticateUserKey(req, store) {
   return { keyHash, record, user }
 }
 
-function createUserKey(label = 'Default key') {
+function createUserKey(label = 'Default key', defaults = {}) {
   const key = `rz_${crypto.randomBytes(24).toString('base64url')}`
-  return { id: crypto.randomUUID(), key, keyHash: hashApiKey(key), fingerprint: keyFingerprint(key), label, active: true, createdAt: new Date().toISOString(), lastUsedAt: null, requestCount: 0, rpmLimit: maxRequestsPerMinute, rpdLimit: maxRequestsPerDay }
+  const keyDefaults = normalizeKeyDefaults(defaults)
+  return { id: crypto.randomUUID(), key, keyHash: hashApiKey(key), fingerprint: keyFingerprint(key), label, active: true, createdAt: new Date().toISOString(), lastUsedAt: null, requestCount: 0, rpmLimit: keyDefaults.rpmLimit, rpdLimit: keyDefaults.rpdLimit }
 }
 
-function createUserKeyForUser(userId, label = 'Default key') {
-  return { ...createUserKey(label), userId }
+function createUserKeyForUser(userId, label = 'Default key', defaults = {}) {
+  return { ...createUserKey(label, defaults), userId }
 }
 
 function persistableUserKey(key) {
@@ -771,11 +783,13 @@ function sanitizeModel(model) {
 }
 
 function sanitizeStoreInput(store) {
+  const keyDefaults = normalizeKeyDefaults(store.keyDefaults || {})
   return {
     ...store,
     models: Array.isArray(store.models) ? store.models.map(sanitizeModel).filter((model) => model.id) : [],
     verifiedEmails: normalizeVerifiedEmails(store.verifiedEmails || []),
-    userKeys: normalizeUserKeys(store.userKeys || []),
+    keyDefaults,
+    userKeys: normalizeUserKeys(store.userKeys || [], keyDefaults),
     incidents: Array.isArray(store.incidents) ? store.incidents.slice(0, 200) : [],
     audit: Array.isArray(store.audit) ? store.audit.slice(0, 500) : [],
     oauthStates: Array.isArray(store.oauthStates) ? store.oauthStates.slice(0, 200) : []
@@ -1170,6 +1184,7 @@ async function handleAdmin(req, res, pathname) {
         }
       }
     })
+    const keyDefaults = normalizeKeyDefaults(next.keyDefaults || store.keyDefaults || {})
     const mergedUserKeys = Array.isArray(next.userKeys)
       ? next.userKeys.map((incomingKey) => {
         const existing = (store.userKeys || []).find((key) => key.id === incomingKey.id)
@@ -1179,12 +1194,12 @@ async function handleAdmin(req, res, pathname) {
           key: undefined,
           keyHash: existing?.keyHash || incomingKey.keyHash,
           fingerprint: existing?.fingerprint || incomingKey.fingerprint,
-          rpmLimit: normalizeLimit(incomingKey.rpmLimit, existing?.rpmLimit || maxRequestsPerMinute),
-          rpdLimit: normalizeLimit(incomingKey.rpdLimit, existing?.rpdLimit || maxRequestsPerDay)
+          rpmLimit: normalizeLimit(incomingKey.rpmLimit, existing?.rpmLimit || keyDefaults.rpmLimit),
+          rpdLimit: normalizeLimit(incomingKey.rpdLimit, existing?.rpdLimit || keyDefaults.rpdLimit)
         }
       })
       : store.userKeys
-    const saved = await normalizeStoreSecrets(sanitizeStoreInput({ ...store, ...next, models: mergedModels, userKeys: mergedUserKeys, audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'config_saved' }] }))
+    const saved = await normalizeStoreSecrets(sanitizeStoreInput({ ...store, ...next, models: mergedModels, keyDefaults, userKeys: mergedUserKeys, audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'config_saved' }] }))
     await writeStore(saved)
     return sendJson(res, 200, adminStore(saved))
   }
@@ -1209,7 +1224,7 @@ async function handleAdmin(req, res, pathname) {
   if (req.method === 'POST' && pathname === '/api/admin/keys') {
     const { label } = await readBody(req)
     const adminUser = (store.users || []).find((user) => user.email === 'admin@local.raze') || { id: 'admin-local', email: 'admin@local.raze', username: 'Admin', avatarUrl: '', banned: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
-    const key = createUserKeyForUser(adminUser.id, label || 'Admin-created key')
+    const key = createUserKeyForUser(adminUser.id, label || 'Admin-created key', store.keyDefaults)
     const saved = { ...store, userKeys: [persistableUserKey(key), ...(store.userKeys || [])] }
     if (!(store.users || []).some((user) => user.id === adminUser.id)) saved.users = [adminUser, ...(store.users || [])]
     await writeStore(saved)
@@ -1226,10 +1241,57 @@ async function handleAdmin(req, res, pathname) {
     await writeStore(saved)
     return sendJson(res, 200, adminStore(saved))
   }
+  if (req.method === 'DELETE' && pathname.startsWith('/api/admin/users/')) {
+    const userId = pathname.split('/')[4]
+    const userExists = (store.users || []).some((user) => user.id === userId)
+    if (!userExists) return sendJson(res, 404, { error: 'user_not_found' })
+    const saved = {
+      ...store,
+      users: (store.users || []).filter((user) => user.id !== userId),
+      sessions: (store.sessions || []).filter((session) => session.userId !== userId),
+      userKeys: (store.userKeys || []).filter((key) => key.userId !== userId),
+      audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'admin_delete_user', userId }]
+    }
+    await writeStore(saved)
+    return sendJson(res, 200, adminStore(saved))
+  }
+  if (req.method === 'DELETE' && pathname === '/api/admin/users') {
+    const saved = {
+      ...store,
+      users: [],
+      sessions: [],
+      userKeys: [],
+      audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'admin_delete_all_users' }]
+    }
+    await writeStore(saved)
+    return sendJson(res, 200, adminStore(saved))
+  }
   if (req.method === 'POST' && pathname.startsWith('/api/admin/keys/')) {
     const keyId = pathname.split('/')[4]
     const { active, rpmLimit, rpdLimit } = await readBody(req)
-    const saved = { ...store, userKeys: normalizeUserKeys((store.userKeys || []).map((key) => key.id === keyId ? { ...key, active: active === undefined ? key.active : Boolean(active), rpmLimit: normalizeLimit(rpmLimit, key.rpmLimit || maxRequestsPerMinute), rpdLimit: normalizeLimit(rpdLimit, key.rpdLimit || maxRequestsPerDay) } : key)) }
+    const keyDefaults = normalizeKeyDefaults(store.keyDefaults || {})
+    const saved = { ...store, userKeys: normalizeUserKeys((store.userKeys || []).map((key) => key.id === keyId ? { ...key, active: active === undefined ? key.active : Boolean(active), rpmLimit: normalizeLimit(rpmLimit, key.rpmLimit || keyDefaults.rpmLimit), rpdLimit: normalizeLimit(rpdLimit, key.rpdLimit || keyDefaults.rpdLimit) } : key), keyDefaults) }
+    await writeStore(saved)
+    return sendJson(res, 200, adminStore(saved))
+  }
+  if (req.method === 'DELETE' && pathname.startsWith('/api/admin/keys/')) {
+    const keyId = pathname.split('/')[4]
+    const keyExists = (store.userKeys || []).some((key) => key.id === keyId)
+    if (!keyExists) return sendJson(res, 404, { error: 'key_not_found' })
+    const saved = {
+      ...store,
+      userKeys: (store.userKeys || []).filter((key) => key.id !== keyId),
+      audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'admin_delete_key', keyId }]
+    }
+    await writeStore(saved)
+    return sendJson(res, 200, adminStore(saved))
+  }
+  if (req.method === 'DELETE' && pathname === '/api/admin/keys') {
+    const saved = {
+      ...store,
+      userKeys: [],
+      audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'admin_delete_all_keys' }]
+    }
     await writeStore(saved)
     return sendJson(res, 200, adminStore(saved))
   }
@@ -1364,7 +1426,7 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       // Deactivate all existing keys for this user so only one active key exists at a time
       const deactivated = (store.userKeys || []).map((k) => k.userId === session.user.id ? { ...k, active: false } : k)
-      const key = createUserKeyForUser(session.user.id, body.label || 'Dashboard key')
+      const key = createUserKeyForUser(session.user.id, body.label || 'Dashboard key', store.keyDefaults)
       await writeStore({ ...store, userKeys: [persistableUserKey(key), ...deactivated] })
       return sendJson(res, 200, key)
     }
