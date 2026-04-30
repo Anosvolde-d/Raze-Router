@@ -184,9 +184,14 @@ function App() {
   const [selectedModelId, setSelectedModelId] = useState(seedModels[0].id)
   const [playgroundError, setPlaygroundError] = useState('')
   const [confirmState, setConfirmState] = useState<ConfirmState>({ open: false, title: '', body: '', confirmLabel: 'Confirm', tone: 'default', onConfirm: () => {} })
+  const [authNotice, setAuthNotice] = useState<{ title: string; body: string } | null>(null)
 
   const closeConfirm = useCallback(() => {
     setConfirmState((prev) => ({ ...prev, open: false }))
+  }, [])
+
+  const closeAuthNotice = useCallback(() => {
+    setAuthNotice(null)
   }, [])
 
   const openConfirm = useCallback((title: string, body: string, onConfirm: () => void, confirmLabel = 'Confirm', tone: 'default' | 'danger' = 'default') => {
@@ -209,6 +214,19 @@ function App() {
       if (config.models?.length) setModels(config.models)
       setSyncState('backend connected')
     }).catch((error) => setSyncState(`local fallback: ${error.message}`))
+  }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const authStatus = params.get('auth')
+    if (authStatus === 'email_unverified' || authStatus === 'email_not_verified_by_admin') {
+      setAuthNotice({ title: 'Email not verified', body: "Gne gne, your email isn't verified. Please contact an admin." })
+    }
+    if (authStatus) {
+      params.delete('auth')
+      const nextSearch = params.toString()
+      window.history.replaceState({}, document.title, `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`)
+    }
   }, [])
 
   useEffect(() => {
@@ -363,6 +381,7 @@ function App() {
 
       {loginOpen && <LoginModal close={() => setLoginOpen(false)} user={user} />}
       {adminGateOpen && <AdminGate password={password} setPassword={setPassword} close={() => setAdminGateOpen(false)} submit={unlockAdmin} />}
+      {authNotice && <NoticeModal title={authNotice.title} body={authNotice.body} close={closeAuthNotice} />}
       {confirmState.open && <ConfirmModal title={confirmState.title} body={confirmState.body} confirmLabel={confirmState.confirmLabel} tone={confirmState.tone} close={closeConfirm} confirm={() => { confirmState.onConfirm(); closeConfirm() }} />}
     </>
   )
@@ -869,6 +888,10 @@ function LoginModal({ close, user }: { close: () => void; user: UserProfile | nu
 
 function AdminGate({ password, setPassword, close, submit }: { password: string; setPassword: (value: string) => void; close: () => void; submit: () => void }) {
   return <div className="modal-backdrop"><div className="login-modal"><button className="modal-close" onClick={close}>x</button><p className="eyebrow">admin gate</p><h2>Enter admin key</h2><p>This key is also used for protected backend admin routes.</p><div className="password-row"><input value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submit() }} autoFocus placeholder="Admin key" type="password" /><button onClick={submit}>Unlock</button></div><small>Set RAZE_ADMIN_KEY on Railway before production.</small></div></div>
+}
+
+function NoticeModal({ title, body, close }: { title: string; body: string; close: () => void }) {
+  return <div className="modal-backdrop"><div className="login-modal confirm-modal"><button className="modal-close" onClick={close}>x</button><p className="eyebrow">access blocked</p><h2>{title}</h2><p>{body}</p><div className="confirm-modal-actions"><button className="primary" onClick={close}>Okay</button></div></div></div>
 }
 
 function ConfirmModal({ title, body, confirmLabel = 'Confirm', tone = 'default', close, confirm }: { title: string; body: string; confirmLabel?: string; tone?: 'default' | 'danger'; close: () => void; confirm: () => void }) {
