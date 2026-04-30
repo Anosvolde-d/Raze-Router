@@ -1,34 +1,34 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { CacheMode, Capability, Model, ModelStatus, ProviderType, Visibility } from './types'
 import { capabilityDescriptions, createBlankModel, seedModels } from './data/models'
 import { changelog } from './data/changelog'
-import { clearUserApiKey, clearUserSession, createUserApiKey, fetchAdminConfig, fetchAdminIncident, fetchPublicConfig, fetchUserSession, getStoredAdminKey, getUserApiKey, saveAdminConfig, saveProviderSecret, sendChatCompletion, setStoredAdminKey, startGoogleAuth, storeUserApiKey, uploadAvatar, verifyAdminKey, type UserProfile } from './api'
+import { clearUserApiKey, clearUserSession, createUserApiKey, fetchAdminConfig, fetchAdminIncident, fetchPublicConfig, fetchUserSession, getStoredAdminKey, getUserApiKey, saveAdminConfig, saveProviderSecret, sendChatCompletionStream, setStoredAdminKey, startGoogleAuth, storeUserApiKey, uploadAvatar, verifyAdminKey, type RequestLogEntry, type UserKeyConfig, type UserProfile } from './api'
 
-const views = ['Landing', 'Models', 'Playground', 'Dashboard', 'Changelog', 'Status'] as const
+const views = ['Landing', 'Models', 'Playground', 'Dashboard', 'Changelog'] as const
 type View = (typeof views)[number] | 'Admin'
 
 type AdminConfig = {
   models?: Model[]
   users?: UserProfile[]
-  userKeys?: Array<{ id: string; key?: string; userId?: string; label: string; active: boolean; createdAt: string; lastUsedAt: string | null; requestCount: number }>
-  requestLogs?: Array<{ id: string; at: string; userId: string; keyId?: string; email: string; username: string; model: string; status: number; inputTokens: number; outputTokens: number; totalTokens: number; incidentCode?: string }>
-  incidents?: Array<{ code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string }>
+  verifiedEmails?: string[]
+  userKeys?: UserKeyConfig[]
+  requestLogs?: RequestLogEntry[]
+  incidents?: Array<{ code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string | null; userKeyId?: string }>
 }
 
-type IncidentDetail = { code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string; userKeyId?: string }
+type IncidentDetail = { code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string | null; userKeyId?: string }
 type PlaygroundContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } } | { type: 'file'; file: { name: string; mimeType: string; dataUrl: string } }
 type PlaygroundMessage = { role: 'user' | 'assistant'; content: string | PlaygroundContentPart[] }
 type PlaygroundAttachment = { id: string; name: string; type: string; dataUrl: string; kind: 'image' | 'file' }
-type PlaygroundResponse = { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }
 type RenderSegment = { type: 'thinking' | 'markdown'; content: string; closed?: boolean }
 type ConfirmState = { open: boolean; title: string; body: string; confirmLabel?: string; tone?: 'default' | 'danger'; onConfirm: () => void }
 
-type AdminSection = 'Routes' | 'Aliases' | 'Accounts' | 'Request Logs'
+type AdminSection = 'Routes' | 'Aliases' | 'Accounts' | 'Verification' | 'Request Logs'
 
 const filters = ['All', 'Online', 'Vision', 'Multimodal', 'Fast', 'Long Context', 'Experimental', 'New', 'Staff Picks']
 const sortOptions = ['Priority', 'Fastest', 'Longest Context', 'Recently Added', 'Alphabetical']
-const adminSections: AdminSection[] = ['Routes', 'Aliases', 'Accounts', 'Request Logs']
+const adminSections: AdminSection[] = ['Routes', 'Aliases', 'Accounts', 'Verification', 'Request Logs']
 const capabilities: Capability[] = ['Vision', 'Audio', 'Video', 'Files', 'Tools', 'Reasoning', 'Streaming', 'Multimodal']
 const providerTypes: ProviderType[] = ['OpenAI Compatible', 'Anthropic', 'Custom']
 const cacheModes: CacheMode[] = ['Off', 'Anthropic Prompt Cache', 'OpenAI Compatible Cache', 'Hybrid']
@@ -260,8 +260,9 @@ function App() {
   const saveConfig = async () => {
     if (!adminKey) return setSyncState('admin key required')
     try {
-      const saved = await saveAdminConfig(adminKey, { models })
+      const saved = await saveAdminConfig(adminKey, { ...adminConfig, models })
       setModels(saved.models)
+      setAdminConfig(saved)
       setSyncState('config saved')
     } catch (error) {
       setSyncState(error instanceof Error ? error.message : 'save failed')
@@ -272,8 +273,12 @@ function App() {
     if (!adminKey) return
     const config = await fetchAdminConfig(adminKey)
     setModels(config.models)
-    setAdminConfig({ models: config.models, users: config.users, userKeys: config.userKeys, requestLogs: config.requestLogs, incidents: config.incidents })
+    setAdminConfig({ models: config.models, users: config.users, verifiedEmails: config.verifiedEmails, userKeys: config.userKeys, requestLogs: config.requestLogs, incidents: config.incidents })
   }
+
+  const updateAdminConfig = useCallback((updater: (config: AdminConfig) => AdminConfig) => {
+    setAdminConfig((current) => updater(current))
+  }, [])
 
   const saveSecret = async (name: string, value: string) => {
     if (!adminKey) return setSyncState('admin key required')
@@ -314,7 +319,7 @@ function App() {
       setView('Admin')
       fetchAdminConfig(password).then((config) => {
         if (config.models?.length) setModels(config.models)
-        setAdminConfig({ models: config.models, users: config.users, userKeys: config.userKeys, requestLogs: config.requestLogs, incidents: config.incidents })
+        setAdminConfig({ models: config.models, users: config.users, verifiedEmails: config.verifiedEmails, userKeys: config.userKeys, requestLogs: config.requestLogs, incidents: config.incidents })
         setSyncState('admin backend connected')
       }).catch((error) => setSyncState(error instanceof Error ? error.message : 'admin sync failed'))
     } catch (error) {
@@ -349,11 +354,10 @@ function App() {
         {view === 'Models' && <ModelsView filter={filter} setFilter={setFilter} sort={sort} setSort={setSort} visibleModels={visibleModels} copyId={copyId} copied={copied} />}
         {view === 'Playground' && <Playground models={visibleModels} userApiKey={userApiKey} error={playgroundError} setError={setPlaygroundError} />}
         {view === 'Dashboard' && <Dashboard setView={setView} openLogin={() => setLoginOpen(true)} userApiKey={userApiKey} setUserApiKey={setUserApiKey} user={user} setUser={setUser} logout={logout} openConfirm={openConfirm} />}
-        {view === 'Admin' && adminUnlocked && selectedModel && <AdminPanel models={models} adminConfig={adminConfig} selectedModel={selectedModel} selectedModelId={selectedModelId} setSelectedModelId={setSelectedModelId} adminSection={adminSection} setAdminSection={setAdminSection} updateModel={updateModel} addModel={addModel} deleteModel={deleteModel} saveConfig={saveConfig} saveSecret={saveSecret} syncState={syncState} toggleCapability={(cap) => toggleCapability(selectedModel, updateModel, cap)} refreshAdmin={refreshAdmin} adminKey={adminKey} />}
+        {view === 'Admin' && adminUnlocked && selectedModel && <AdminPanel models={models} adminConfig={adminConfig} updateAdminConfig={updateAdminConfig} selectedModel={selectedModel} selectedModelId={selectedModelId} setSelectedModelId={setSelectedModelId} adminSection={adminSection} setAdminSection={setAdminSection} updateModel={updateModel} addModel={addModel} deleteModel={deleteModel} saveConfig={saveConfig} saveSecret={saveSecret} syncState={syncState} toggleCapability={(cap) => toggleCapability(selectedModel, updateModel, cap)} refreshAdmin={refreshAdmin} adminKey={adminKey} />}
         {view === 'Admin' && adminUnlocked && !selectedModel && <div style={{ padding: '60px 5vw' }}><p style={{ fontFamily: 'ui-monospace, monospace', fontSize: '.9rem' }}>Loading routes from backend…</p></div>}
         {view === 'Admin' && !adminUnlocked && <LockedAdmin openGate={() => setAdminGateOpen(true)} />}
         {view === 'Changelog' && <Changelog />}
-        {view === 'Status' && <ControlCenter user={user} syncState={syncState} adminUnlocked={adminUnlocked} />}
       </main>
 
       {loginOpen && <LoginModal close={() => setLoginOpen(false)} user={user} />}
@@ -449,7 +453,7 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
     model: model.id,
     messages: [{ role: 'system', content: systemPrompt }, ...messages, { role: 'user', content: prompt || '<prompt>' }],
     attachments: attachments.map((file) => ({ name: file.name, type: file.type })),
-    stream: false,
+    stream: true,
   } : null
 
   const attachFiles = async (files: FileList | null) => {
@@ -494,7 +498,7 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
       setError('No route is configured yet.')
       return
     }
-    if (!prompt.trim()) return
+    if (!prompt.trim() && !attachments.length) return
     if (!userApiKey) {
       setError('Generate or paste a user API key in Dashboard before using the playground.')
       setResult('Missing bearer key. Open Dashboard and generate a user API key first.')
@@ -517,11 +521,19 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
         composerRef.current.value = ''
         resizeComposer(composerRef.current)
       }
-      const data = await sendChatCompletion({ model: model.id, messages: [{ role: 'system', content: systemPrompt }, ...outgoing], stream: false }) as PlaygroundResponse
-      const raw = JSON.stringify(data, null, 2)
-      setResult(raw)
-      const assistantText = String(data?.choices?.[0]?.message?.content || 'No assistant content returned.')
-      setMessages([...outgoing, { role: 'assistant', content: assistantText }])
+      let streamedText = ''
+      setMessages([...outgoing, { role: 'assistant', content: '' }])
+      setResult('streaming response...')
+      await sendChatCompletionStream({ model: model.id, messages: [{ role: 'system', content: systemPrompt }, ...outgoing], stream: true }, (delta) => {
+        streamedText += delta
+        setResult(streamedText)
+        setMessages([...outgoing, { role: 'assistant', content: streamedText }])
+      })
+      if (!streamedText.trim()) {
+        streamedText = 'No assistant content returned.'
+        setResult(streamedText)
+        setMessages([...outgoing, { role: 'assistant', content: streamedText }])
+      }
     } catch (submitError) {
       const message = submitError instanceof Error ? submitError.message : 'request failed'
       setError(message)
@@ -593,8 +605,8 @@ function Dashboard({ setView, openLogin, userApiKey, setUserApiKey, user, setUse
   return <section className="view-shell dashboard-section"><div className="section-heading"><p className="eyebrow">dashboard</p><h2>Command center.</h2><p>Verified Google sessions can manage avatars and one protected RAZE API key.</p></div><div className="dashboard-grid"><article className="wide-panel dashboard-account-panel"><p className="eyebrow">account</p><h3>{user ? user.username : 'Sign in required'}</h3><p>{user ? `${user.email} · ${user.emailVerified ? 'verified Google account' : 'verification required'}` : 'Sign in with Google to unlock avatar storage and API key creation.'}</p><div className="dashboard-actions">{user ? <><button className="primary" onClick={logout}>Sign out</button><button className="secondary" onClick={() => setView('Playground')}>Open Playground</button></> : <><button className="google-btn" onClick={openLogin}>Sign in with Google</button><button className="secondary" onClick={() => setView('Models')}>View Registry</button></>}</div></article><article className="wide-panel dashboard-avatar-panel"><p className="eyebrow">profile image</p><p>Drop a PNG, JPEG, WEBP, or GIF file under 750 KB. The image is stored in the backend database and served through your protected profile route.</p><div className={`avatar-dropzone ${user ? '' : 'disabled'}`} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}><div className="avatar-preview">{user?.avatarUrl ? <img src={user.avatarUrl} alt="Profile avatar" /> : <span>{user?.username?.slice(0, 1) || '?'}</span>}</div><div className="avatar-copy"><b>Drop avatar here</b><span>{user ? 'or use file picker' : 'sign in first'}</span></div><label className="secondary avatar-upload-label">Choose file<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={!user} onChange={(event) => { const file = event.target.files?.[0]; if (file) onAvatarFile(file) }} /></label></div><small>{avatarState || 'No avatar uploaded yet.'}</small></article><article className="wide-panel dashboard-key-panel"><p className="eyebrow">api key</p><p>Only one active dashboard key is kept per user. Generating a new one replaces the previous key.</p><div className="dashboard-key-shell"><div className="dashboard-key-readout"><code>{keyVisible ? (userApiKey || 'No key generated yet.') : (userApiKey ? maskApiKey(userApiKey) : 'No key generated yet.')}</code></div><div className="dashboard-key-actions"><button className="secondary" onClick={() => setKeyVisible((value) => !value)} disabled={!userApiKey}>{keyVisible ? 'Hide key' : 'Reveal key'}</button><button className="secondary" onClick={copyUserKey} disabled={!userApiKey}>Copy key</button><button className="primary" onClick={generateKey} disabled={!user}>{userApiKey ? 'Regenerate key' : 'Generate key'}</button></div></div><small>{keyState || 'Keys stay hidden until you explicitly reveal them.'}</small></article></div></section>
 }
 
-function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; selectedModel: Model; selectedModelId: string; setSelectedModelId: (id: string) => void; adminSection: AdminSection; setAdminSection: (tab: AdminSection) => void; updateModel: (patch: Partial<Model>) => void; addModel: () => void; deleteModel: () => void; saveConfig: () => void; saveSecret: (name: string, value: string) => void; syncState: string; toggleCapability: (cap: Capability) => void; refreshAdmin: () => void; adminKey: string }) {
-  const { models, adminConfig, selectedModel: rawModel, selectedModelId, setSelectedModelId, adminSection, setAdminSection, updateModel, addModel, deleteModel, saveConfig, saveSecret, syncState, toggleCapability, refreshAdmin, adminKey } = props
+function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; updateAdminConfig: (updater: (config: AdminConfig) => AdminConfig) => void; selectedModel: Model; selectedModelId: string; setSelectedModelId: (id: string) => void; adminSection: AdminSection; setAdminSection: (tab: AdminSection) => void; updateModel: (patch: Partial<Model>) => void; addModel: () => void; deleteModel: () => void; saveConfig: () => void; saveSecret: (name: string, value: string) => void; syncState: string; toggleCapability: (cap: Capability) => void; refreshAdmin: () => void; adminKey: string }) {
+  const { models, adminConfig, updateAdminConfig, selectedModel: rawModel, selectedModelId, setSelectedModelId, adminSection, setAdminSection, updateModel, addModel, deleteModel, saveConfig, saveSecret, syncState, toggleCapability, refreshAdmin, adminKey } = props
 
   const selectedModel: Model = {
     ...rawModel,
@@ -621,6 +633,8 @@ function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; selected
   const [selectedIncidentCode, setSelectedIncidentCode] = useState('')
   const [incidentDetail, setIncidentDetail] = useState<IncidentDetail | null>(null)
   const [incidentState, setIncidentState] = useState('')
+  const [verifiedEmailDraft, setVerifiedEmailDraft] = useState('')
+  const [verificationState, setVerificationState] = useState('')
 
   const storedIncidents = adminConfig.incidents || []
   const requestLogs = adminConfig.requestLogs || []
@@ -693,31 +707,47 @@ function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; selected
   const aliases = normalizeAliasInput(aliasDraft)
   const totalRequests = requestLogs.length
   const totalUsers = (adminConfig.users || []).length
-  const totalKeys = (adminConfig.userKeys || []).length
+  const userKeys = adminConfig.userKeys || []
+  const verifiedEmails = adminConfig.verifiedEmails || []
+  const totalKeys = userKeys.length
   const selectedIncidentLog = failedLogs.find((log) => log.incidentCode === selectedIncidentCode) || null
+
+  const addVerifiedEmail = () => {
+    const email = verifiedEmailDraft.trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setVerificationState('enter a valid email first')
+      return
+    }
+    updateAdminConfig((config) => {
+      const emails = [...new Set([...(config.verifiedEmails || []).map((item) => item.trim().toLowerCase()).filter(Boolean), email])]
+      return { ...config, verifiedEmails: emails }
+    })
+    setVerifiedEmailDraft('')
+    setVerificationState(email + ' added to verified allowlist')
+  }
+
+  const removeVerifiedEmail = (email: string) => {
+    const normalized = email.trim().toLowerCase()
+    updateAdminConfig((config) => ({ ...config, verifiedEmails: (config.verifiedEmails || []).filter((item) => item.trim().toLowerCase() !== normalized) }))
+    setVerificationState(normalized + ' removed from allowlist')
+  }
+
+  const updateUserKeyLimit = (keyId: string, field: 'rpmLimit' | 'rpdLimit', value: string) => {
+    const parsed = Math.max(1, Math.floor(Number(value) || 1))
+    updateAdminConfig((config) => ({ ...config, userKeys: (config.userKeys || []).map((key) => key.id === keyId ? { ...key, [field]: parsed } : key) }))
+  }
 
   return <section className="view-shell admin-section"><div className="section-heading split-heading"><div><p className="eyebrow">admin / protected</p><h2>Router control panel.</h2><p>Clean route setup for model ID, endpoint, context enforcement, aliases, and readable account activity.</p><p className="eyebrow">{syncState}</p></div><div className="admin-actions"><button className="secondary" onClick={refreshAdmin}>Refresh</button><button className="secondary" onClick={saveConfig}>Save changes</button><button className="primary" onClick={addModel}>Add route</button></div></div><div className="admin-shell"><aside className="admin-sidebar"><div className="admin-sidebar-block"><span className="admin-sidebar-label">Sections</span>{adminSections.map((section) => <button key={section} onClick={() => setAdminSection(section)} className={adminSection === section ? 'active' : ''}>{section}</button>)}</div><div className="admin-sidebar-block"><span className="admin-sidebar-label">Routes</span><select value={selectedModelId} onChange={(event) => setSelectedModelId(event.target.value)}>{models.map((model) => <option value={model.id} key={model.id}>{model.name} / {model.id}</option>)}</select><div className="admin-quick-switcher">{models.map((model) => <button key={model.id} type="button" className={model.id === selectedModelId ? 'active' : ''} onClick={() => setSelectedModelId(model.id)}><b>{model.name}</b><span>{model.id}</span></button>)}</div><div className="admin-route-pills">{routeSummary.map(([label, value]) => <div key={label} className="admin-route-pill"><span>{label}</span><b>{value}</b></div>)}</div></div></aside><div className="admin-main">{adminSection === 'Routes' ? <div className="admin-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">route basics</p><h3>{selectedModel.name || 'Untitled route'}</h3></div><span>public registry metadata</span></div><div className="admin-inline-actions"><button className="danger" onClick={deleteModel}>Delete route</button></div><div className="admin-form-grid"><label><span>Name</span><input value={selectedModel.name} onChange={(event) => updateModel({ name: event.target.value })} /></label><label><span>Model ID</span><input value={selectedModel.id} onChange={(event) => updateModel({ id: event.target.value })} /></label><label className="admin-field-span-2"><span>Description</span><textarea rows={4} value={selectedModel.description} onChange={(event) => updateModel({ description: event.target.value })} /></label><label><span>Status</span><select value={selectedModel.status} onChange={(event) => updateModel({ status: event.target.value as ModelStatus })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label><label><span>Visibility</span><select value={selectedModel.visibility} onChange={(event) => updateModel({ visibility: event.target.value as Visibility })}>{visibilities.map((value) => <option key={value}>{value}</option>)}</select></label><label><span>First token (s)</span><input type="number" value={selectedModel.firstToken} onChange={(event) => updateModel({ firstToken: Number(event.target.value) })} /></label><label><span>Context limit</span><input type="number" value={selectedModel.maxContext} onChange={(event) => updateModel({ maxContext: Number(event.target.value) })} /></label><label><span>Added</span><input value={selectedModel.added} onChange={(event) => updateModel({ added: event.target.value })} /></label><label><span>Sort priority</span><input type="number" value={selectedModel.sortPriority} onChange={(event) => updateModel({ sortPriority: Number(event.target.value) })} /></label><label className="admin-field-span-2"><span>Gradient</span><input value={selectedModel.gradient} onChange={(event) => updateModel({ gradient: event.target.value })} /></label><label className="admin-field-span-2"><span>Video URL</span><input value={selectedModel.videoUrl || ''} onChange={(event) => updateModel({ videoUrl: event.target.value })} /></label><label><span>Featured</span><select value={selectedModel.featured ? 'Yes' : 'No'} onChange={(event) => updateModel({ featured: event.target.value === 'Yes' })}><option>Yes</option><option>No</option></select></label><label><span>Tags</span><input value={(selectedModel.tags || []).join(', ')} onChange={(event) => updateModel({ tags: splitList(event.target.value) })} /></label></div></section><section className="admin-card"><div className="admin-card-head"><div><p className="eyebrow">provider</p><h3>Routing target</h3></div><span>server-side only</span></div><div className="admin-form-grid"><label><span>Provider</span><select value={selectedModel.providerConfig.provider} onChange={(event) => updateProvider({ provider: event.target.value as ProviderType })}>{providerTypes.map((provider) => <option key={provider}>{provider}</option>)}</select></label><label><span>Provider model</span><input value={selectedModel.providerConfig.modelId} onChange={(event) => updateProvider({ modelId: event.target.value })} /></label><label><span>OpenAI base URL</span><input value={selectedModel.providerConfig.openAIBaseUrl || ''} onChange={(event) => updateProvider({ openAIBaseUrl: event.target.value })} /></label><label><span>Anthropic endpoint</span><input value={selectedModel.providerConfig.anthropicEndpoint || ''} onChange={(event) => updateProvider({ anthropicEndpoint: event.target.value })} /></label><label><span>Secret label</span><input value={selectedModel.providerConfig.apiKeyLabel} onChange={(event) => updateProvider({ apiKeyLabel: event.target.value })} /></label><label><span>Save secret value</span><input value={secretValue} onChange={(event) => setSecretValue(event.target.value)} placeholder="Paste secret or env label" /></label><button className="primary admin-button-inline" onClick={() => saveSecret(selectedModel.providerConfig.apiKeyLabel, secretValue)}>Save provider secret</button></div></section><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">capabilities</p><h3>Toggle support</h3></div><span>public card icons</span></div><div className="admin-toggle-grid">{capabilities.map((capability) => { const active = selectedModel.capabilities.includes(capability)
               return <button key={capability} className={`admin-toggle ${active ? 'active' : ''}`} onClick={() => toggleCapability(capability)}><b>{capability}</b><small>{capabilityDescriptions[capability]}</small></button>
             })}</div></section><section className="admin-card"><div className="admin-card-head"><div><p className="eyebrow">cache</p><h3>Policy</h3></div><span>request optimization</span></div><div className="admin-form-grid"><label><span>Cache mode</span><select value={selectedModel.providerConfig.cacheMode} onChange={(event) => updateProvider({ cacheMode: event.target.value as CacheMode })}>{cacheModes.map((mode) => <option key={mode}>{mode}</option>)}</select></label><label><span>TTL seconds</span><input type="number" value={selectedModel.providerConfig.cacheTtlSeconds} onChange={(event) => updateProvider({ cacheTtlSeconds: Number(event.target.value) })} /></label><label><span>Cache system prompt</span><select value={selectedModel.providerConfig.cacheSystemPrompt ? 'Yes' : 'No'} onChange={(event) => updateProvider({ cacheSystemPrompt: event.target.value === 'Yes' })}><option>Yes</option><option>No</option></select></label><label><span>Cache tools</span><select value={selectedModel.providerConfig.cacheTools ? 'Yes' : 'No'} onChange={(event) => updateProvider({ cacheTools: event.target.value === 'Yes' })}><option>Yes</option><option>No</option></select></label><label><span>Cache large context</span><select value={selectedModel.providerConfig.cacheLargeContext ? 'Yes' : 'No'} onChange={(event) => updateProvider({ cacheLargeContext: event.target.value === 'Yes' })}><option>Yes</option><option>No</option></select></label></div></section></div> : null}{adminSection === 'Aliases' ? <div className="admin-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">aliases</p><h3>Route groups and shortcuts</h3></div><span>{aliases.length} active</span></div><label><span>Comma-separated aliases</span><textarea rows={3} value={aliasDraft} onChange={(event) => setAliasDraft(event.target.value)} /></label><div className="admin-inline-actions"><button className="secondary" onClick={() => updateModel({ groups: aliases })}>Apply aliases</button></div><div className="alias-list">{aliases.length ? aliases.map((alias) => <div key={alias} className="alias-chip"><span>{alias}</span><b>{selectedModel.id}</b></div>) : <EmptyState title="No aliases yet" body="Add comma-separated aliases to create routing shortcuts." />}</div></section></div> : null}{adminSection === 'Accounts' ? <div className="admin-grid"><section className="admin-card"><div className="admin-card-head"><div><p className="eyebrow">accounts</p><h3>Users</h3></div><span>{formatNumber(totalUsers)} total</span></div><div className="admin-stats-grid"><div><span>Users</span><b>{formatNumber(totalUsers)}</b></div><div><span>Keys</span><b>{formatNumber(totalKeys)}</b></div><div><span>Requests</span><b>{formatNumber(totalRequests)}</b></div><div><span>Sync</span><b>{syncState}</b></div></div></section><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">user accounts</p><h3>Profile activity</h3></div><span>Google-backed sessions</span></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>User</th><th>Auth</th><th>Key fingerprint</th><th>Requests</th></tr></thead><tbody>{(adminConfig.users || []).length ? (adminConfig.users || []).map((account) => { const activeKey = (adminConfig.userKeys || []).find((key) => key.userId === account.id && key.active)
                     return <tr key={account.id}><td><div className="user-cell"><div className="user-avatar">{account.avatarUrl ? <img src={account.avatarUrl} alt="" /> : <span>{account.username.slice(0, 1)}</span>}</div><div><b>{account.username}</b><small>{account.email}</small></div></div></td><td><b>{account.authMethod}</b><small>{account.emailVerified ? 'verified' : 'not verified'}</small></td><td><code>{fingerprint(activeKey?.key)}</code><small>{activeKey?.label || 'no active key'}</small></td><td><b>{formatNumber(activeKey?.requestCount || 0)}</b><small>last used {formatDate(activeKey?.lastUsedAt)}</small></td></tr>
-                  }) : <tr><td colSpan={4}>No accounts yet.</td></tr>}</tbody></table></div></section></div> : null}{adminSection === 'Request Logs' ? <div className="admin-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">logs</p><h3>Recent requests</h3></div><span>{formatNumber(requestLogs.length)} recorded</span></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>When</th><th>User</th><th>Model</th><th>Status</th><th>Tokens</th><th>Incident</th></tr></thead><tbody>{requestLogs.length ? requestLogs.map((log) => <tr key={log.id}><td><b>{formatDate(log.at)}</b></td><td><b>{log.username}</b><small>{log.email}</small></td><td><code>{log.model}</code></td><td><b>{log.status}</b></td><td><b>{formatNumber(log.totalTokens)}</b><small>{formatNumber(log.inputTokens)} in / {formatNumber(log.outputTokens)} out</small></td><td><code>{log.incidentCode || '—'}</code></td></tr>) : <tr><td colSpan={6}>No request logs yet.</td></tr>}</tbody></table></div></section><section className="admin-card"><div className="admin-card-head"><div><p className="eyebrow">alerts</p><h3>Incidents and alerts</h3></div><span>{incidentSummaries.length} total</span></div><div className="incident-list">{incidentSummaries.length ? incidentSummaries.map((incident) => { const expanded = selectedIncidentCode === incident.code; const logEntry = failedLogs.find((l) => l.incidentCode === incident.code) || null; const statusCode = incident.status ?? logEntry?.status ?? 0; const isSevere = statusCode >= 500
+                  }) : <tr><td colSpan={4}>No accounts yet.</td></tr>}</tbody></table></div></section></div> : null}{adminSection === 'Verification' ? <div className="admin-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">verified access</p><h3>Email allowlist</h3></div><span>{verifiedEmails.length} allowed</span></div><p className="admin-copy">Only Google accounts whose email is listed here can finish registration and create user API keys. Save changes after editing this list.</p><div className="verified-email-form"><input type="email" value={verifiedEmailDraft} onChange={(event) => setVerifiedEmailDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addVerifiedEmail() } }} placeholder="user@example.com" /><button className="primary" type="button" onClick={addVerifiedEmail}>Add email</button></div><small className="admin-inline-help">{verificationState || 'Unlisted users receive: your email is not verified, please contact an admin.'}</small><div className="verified-email-list">{verifiedEmails.length ? verifiedEmails.map((email) => <button key={email} type="button" className="verified-email-chip" onClick={() => removeVerifiedEmail(email)} aria-label={'Remove ' + email + ' from verified emails'}><span>{email}</span><b>remove</b></button>) : <EmptyState title="No verified emails" body="Add the first allowed email before inviting users." />}</div><div className="admin-card-head"><div><p className="eyebrow">automation endpoint</p><h3>Discord bot contract</h3></div><span>POST /verified</span></div><pre className="admin-code-sample">{'POST /verified\nAuthorization: Bearer <MAIL-VERIFICATION-PASS>\nContent-Type: application/json\n\n{ "email": "user@example.com" }'}</pre></section><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">api keys</p><h3>Per-key RPM / RPD limits</h3></div><span>{userKeys.length} keys</span></div><div className="admin-table-wrap"><table className="admin-table key-limit-table"><thead><tr><th>Key</th><th>Owner</th><th>Status</th><th>RPM</th><th>RPD</th><th>Usage</th></tr></thead><tbody>{userKeys.length ? userKeys.map((key) => { const owner = (adminConfig.users || []).find((account) => account.id === key.userId); return <tr key={key.id}><td><code>{fingerprint(key.key)}</code><small>{key.label}</small></td><td><b>{owner?.username || 'unknown'}</b><small>{owner?.email || key.userId || 'no user link'}</small></td><td><b>{key.active ? 'active' : 'disabled'}</b><small>created {formatDate(key.createdAt)}</small></td><td><input type="number" min={1} value={key.rpmLimit ?? 60} onChange={(event) => updateUserKeyLimit(key.id, 'rpmLimit', event.target.value)} /></td><td><input type="number" min={1} value={key.rpdLimit ?? 1000} onChange={(event) => updateUserKeyLimit(key.id, 'rpdLimit', event.target.value)} /></td><td><b>{formatNumber(key.requestCount || 0)}</b><small>last used {formatDate(key.lastUsedAt)}</small></td></tr> }) : <tr><td colSpan={6}>No user API keys yet.</td></tr>}</tbody></table></div></section></div> : null}{adminSection === 'Request Logs' ? <div className="admin-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">logs</p><h3>Recent requests</h3></div><span>{formatNumber(requestLogs.length)} recorded</span></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>When</th><th>User</th><th>Model</th><th>Status</th><th>Tokens</th><th>Incident</th></tr></thead><tbody>{requestLogs.length ? requestLogs.map((log) => <tr key={log.id}><td><b>{formatDate(log.at)}</b></td><td><b>{log.username}</b><small>{log.email}</small></td><td><code>{log.model}</code></td><td><b>{log.status}</b></td><td><b>{formatNumber(log.totalTokens)}</b><small>{formatNumber(log.inputTokens)} in / {formatNumber(log.outputTokens)} out</small></td><td><code>{log.incidentCode || '—'}</code></td></tr>) : <tr><td colSpan={6}>No request logs yet.</td></tr>}</tbody></table></div></section><section className="admin-card"><div className="admin-card-head"><div><p className="eyebrow">alerts</p><h3>Incidents and alerts</h3></div><span>{incidentSummaries.length} total</span></div><div className="incident-list">{incidentSummaries.length ? incidentSummaries.map((incident) => { const expanded = selectedIncidentCode === incident.code; const logEntry = failedLogs.find((l) => l.incidentCode === incident.code) || null; const statusCode = incident.status ?? logEntry?.status ?? 0; const isSevere = statusCode >= 500
                 return <div key={incident.code} className={`incident-card ${expanded ? 'expanded' : ''} ${isSevere ? 'severe' : ''}`} onClick={() => openIncident(incident.code)}><div className="incident-card-head"><div className="incident-card-head-left"><span className={`incident-status-badge ${isSevere ? 'error' : 'warn'}`}>{statusCode || '5xx'}</span><div><div className="incident-card-code">{incident.code}</div><div className="incident-card-summary"><code>{incident.model || logEntry?.model || 'unknown route'}</code></div></div></div><div className="incident-card-head-right"><small className="incident-card-time">{formatDate(incident.at)}</small>{!expanded && <small className="incident-card-user">{logEntry?.username || logEntry?.email || ''}</small>}</div></div>{expanded && <><div className="incident-card-meta-row"><span className="incident-card-meta-item">{incident.provider || 'unknown provider'}</span><span className="incident-card-meta-item">{logEntry?.email || '—'}</span><span className="incident-card-meta-item tokens">{logEntry ? `${formatNumber(logEntry.inputTokens)} in / ${formatNumber(logEntry.outputTokens)} out` : '—'}</span></div>{incidentState && <div className="incident-card-loading">{incidentState}</div>}{selectedIncidentLog ? <div className="incident-card-section"><div className="incident-card-label">Recorded request context</div><div className="incident-card-log-grid"><div><span>User</span><b>{selectedIncidentLog.username}</b><small>{selectedIncidentLog.email}</small></div><div><span>Tokens</span><b>{formatNumber(selectedIncidentLog.totalTokens)}</b><small>{formatNumber(selectedIncidentLog.inputTokens)} in / {formatNumber(selectedIncidentLog.outputTokens)} out</small></div><div><span>Status</span><b>{selectedIncidentLog.status}</b><small>{formatDate(selectedIncidentLog.at)}</small></div></div></div> : null}{incidentDetail?.upstream ? <div className="incident-card-section"><div className="incident-card-label">Upstream response</div><pre className="incident-card-upstream">{incidentDetail.upstream}</pre></div> : null}{!incidentDetail && !incidentState ? <div className="incident-card-loading">Detailed upstream payload not available for this entry.</div> : null}</>}</div>
               }) : <EmptyState title="No incidents yet" body="Provider-side failures and 5xx responses will appear here." />}</div></section></div> : null}</div></div></section>
 }
 
 function LockedAdmin({ openGate }: { openGate: () => void }) {
   return <section className="view-shell locked-admin"><p className="eyebrow">admin locked</p><h2>Protected control panel.</h2><p>Use the unlock button and your configured admin key for backend-backed management.</p><button className="primary" onClick={openGate}>Unlock Admin</button></section>
-}
-
-function ControlCenter({ user, syncState, adminUnlocked }: { user: UserProfile | null; syncState: string; adminUnlocked: boolean }) {
-  const items = [
-    user ? `active user session / ${user.email}` : 'no active user session',
-    `config sync / ${syncState}`,
-    `admin panel / ${adminUnlocked ? 'unlocked' : 'locked'}`,
-    'protected key generation / google verified only',
-    'streaming, caching, rate limiting, and observability enabled'
-  ]
-  return <section className="view-shell control-section"><div className="status-panel"><p>RAZE://STATUS</p>{items.map((item) => <span key={item}>{item}</span>)}<b>PRODUCTION STATE: READY</b></div><div className="faq-list">{['OpenAI-compatible routing surface', 'Google-authenticated sessions', 'Railway-ready deployment'].map((item) => <div key={item} className="faq-item"><b>{item}</b><span>RAZE routes requests through a protected backend, keeps provider secrets server-side, and exposes a single standardized API surface.</span></div>)}</div></section>
 }
 
 function Changelog() {

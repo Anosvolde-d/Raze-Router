@@ -1,11 +1,15 @@
 import type { Model } from './types'
 
+export type UserKeyConfig = { id: string; key?: string; userId?: string; label: string; active: boolean; createdAt: string; lastUsedAt: string | null; requestCount: number; rpmLimit?: number; rpdLimit?: number }
+export type RequestLogEntry = { id: string; at: string; userId: string; keyId?: string; email: string; username: string; model: string; status: number; inputTokens: number; outputTokens: number; totalTokens: number; incidentCode?: string; streamed?: boolean }
+
 export type StoreConfig = {
   models: Model[]
   users?: UserProfile[]
-  userKeys?: Array<{ id: string; key?: string; userId?: string; label: string; active: boolean; createdAt: string; lastUsedAt: string | null; requestCount: number }>
-  requestLogs?: Array<{ id: string; at: string; userId: string; email: string; username: string; model: string; status: number; inputTokens: number; outputTokens: number; totalTokens: number; incidentCode?: string }>
-  incidents?: Array<{ code: string; at: string; model?: string; provider?: string; status?: number }>
+  verifiedEmails?: string[]
+  userKeys?: UserKeyConfig[]
+  requestLogs?: RequestLogEntry[]
+  incidents?: Array<{ code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string | null; userKeyId?: string }>
   audit?: Array<{ at: string; action: string }>
 }
 
@@ -68,17 +72,78 @@ export async function saveProviderSecret(adminKey: string, name: string, value: 
   })
 }
 
-export async function sendChatCompletion(body: unknown) {
+function streamContentFromPayload(payload: unknown) {
+  const typed = payload as { choices?: Array<{ delta?: { content?: unknown }; message?: { content?: unknown }; text?: string }> }
+  if (!Array.isArray(typed.choices)) return ''
+  return typed.choices.map((choice) => {
+    const content = choice.delta?.content ?? choice.message?.content
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) return content.map((part) => typeof part === 'string' ? part : String((part as { text?: string })?.text || '')).join('')
+    return choice.text || ''
+  }).join('')
+}
+
+export async function sendChatCompletionStream(body: unknown, onDelta: (delta: string) => void) {
   const apiKey = localStorage.getItem('raze.user.apiKey') || ''
-  return request<unknown>('/v1/chat/completions', {
+  const response = await fetch('/v1/chat/completions', {
     method: 'POST',
-    headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+    headers: {
+      'content-type': 'application/json',
+      ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+    },
     body: JSON.stringify(body),
   })
+
+  if (!response.ok) {
+    const text = await response.text()
+    let message = response.statusText
+    try {
+      const data = text ? JSON.parse(text) : null
+      message = data?.error?.message || data?.error || response.statusText
+    } catch {
+      message = text || response.statusText
+    }
+    throw new Error(String(message).replace(/sk-[A-Za-z0-9_-]+/g, '[redacted-secret]'))
+  }
+
+  if (!response.body) throw new Error('Streaming response body is unavailable.')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let fullText = ''
+
+  const consumeEvent = (rawEvent: string) => {
+    for (const line of rawEvent.split('\n')) {
+      if (!line.startsWith('data:')) continue
+      const data = line.slice(5).trim()
+      if (!data || data === '[DONE]') continue
+      const delta = streamContentFromPayload(JSON.parse(data))
+      if (!delta) continue
+      fullText += delta
+      onDelta(delta)
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+    while (buffer.includes('\n\n')) {
+      const splitAt = buffer.indexOf('\n\n')
+      const rawEvent = buffer.slice(0, splitAt)
+      buffer = buffer.slice(splitAt + 2)
+      consumeEvent(rawEvent)
+    }
+  }
+
+  buffer += decoder.decode().replace(/\r\n/g, '\n')
+  if (buffer.trim()) consumeEvent(buffer)
+  return { text: fullText }
 }
 
 export async function createUserApiKey(label = 'Dashboard key') {
-  return request<{ id: string; key: string; label: string; active: boolean; createdAt: string; lastUsedAt: string | null; requestCount: number }>('/api/keys', {
+  return request<UserKeyConfig & { key: string }>('/api/keys', {
     method: 'POST',
     headers: { 'x-session-token': getUserSessionToken() },
     body: JSON.stringify({ label }),
@@ -86,7 +151,7 @@ export async function createUserApiKey(label = 'Dashboard key') {
 }
 
 export async function createAdminUserApiKey(adminKey: string, label = 'Admin-created key') {
-  return request<{ id: string; key: string; label: string; active: boolean; createdAt: string; lastUsedAt: string | null; requestCount: number }>('/api/admin/keys', {
+  return request<UserKeyConfig & { key: string }>('/api/admin/keys', {
     method: 'POST',
     headers: { 'x-admin-key': adminKey },
     body: JSON.stringify({ label }),

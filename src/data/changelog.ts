@@ -2,6 +2,21 @@ import type { ChangelogEntry } from '../types'
 
 export const changelog: ChangelogEntry[] = [
   {
+    version: 'v4.5',
+    label: 'Verified access + streaming playground',
+    date: '2026-04-30',
+    status: 'Live',
+    notes: [
+      'Per-user API keys now have editable RPM and RPD limits in Admin',
+      'Streaming request logs now estimate and record output tokens instead of leaving token-out at zero',
+      'Verified email allowlist gates Google registration and user API key creation',
+      'POST /verified automation endpoint accepts bot-submitted emails with a Railway secret bearer token',
+      'Playground now streams assistant output live through the OpenAI-compatible router',
+      'Status navigation was removed to keep the public surface focused on models, playground, dashboard, and changelog',
+      'One-time maintenance can clear accounts, sessions, and user API keys while preserving models and provider secrets',
+    ],
+  },
+  {
     version: 'v0.4.1',
     label: 'Mobile-ready + Rich playground',
     date: '2026-04-26',

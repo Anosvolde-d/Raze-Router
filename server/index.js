@@ -38,9 +38,11 @@ const databaseUrl = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL 
 const redisUrl = process.env.REDIS_URL || process.env.REDIS_PUBLIC_URL || ''
 const providerSecrets = new Map()
 const rateBuckets = new Map()
+const dailyRequestBuckets = new Map()
 const tokenBuckets = new Map()
 const maxBodyBytes = Number(process.env.RAZE_MAX_BODY_BYTES || 1_000_000)
 const maxRequestsPerMinute = Number(process.env.RAZE_RATE_LIMIT_PER_MINUTE || 60)
+const maxRequestsPerDay = Number(process.env.RAZE_REQUEST_LIMIT_PER_DAY || 1_000)
 const maxTokensPerMinute = Number(process.env.RAZE_TOKEN_LIMIT_PER_MINUTE || 200_000)
 const cacheNamespace = process.env.RAZE_CACHE_NAMESPACE || 'raze:cache'
 const cacheEnabled = String(process.env.RAZE_CACHE_ENABLED || 'true').toLowerCase() !== 'false'
@@ -69,6 +71,7 @@ const defaultStore = {
   models: [],
   audit: [],
   users: [],
+  verifiedEmails: [],
   sessions: [],
   userKeys: [],
   requestLogs: [],
@@ -172,6 +175,7 @@ async function normalizeStoreSecrets(store) {
     ...store,
     models,
     users: store.users || [],
+    verifiedEmails: normalizeVerifiedEmails(store.verifiedEmails || []),
     sessions: store.sessions || [],
     userKeys: normalizeUserKeys(store.userKeys || []),
     requestLogs: store.requestLogs || [],
@@ -196,11 +200,43 @@ function safeCompare(a = '', b = '') {
   return left.length === right.length && crypto.timingSafeEqual(left, right)
 }
 
+function normalizeLimit(value, fallback) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.max(1, Math.min(Math.floor(parsed), 1_000_000_000))
+}
+
+function normalizeEmail(value = '') {
+  return String(value || '').trim().toLowerCase()
+}
+
+function isValidEmail(value = '') {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value))
+}
+
+function normalizeVerifiedEmails(emails = []) {
+  return [...new Set((Array.isArray(emails) ? emails : []).map(normalizeEmail).filter(isValidEmail))]
+}
+
+function isEmailVerifiedByAdmin(store, email) {
+  return normalizeVerifiedEmails(store.verifiedEmails || []).includes(normalizeEmail(email))
+}
+
+function verificationSecret() {
+  return String(process.env['MAIL-VERIFICATION-PASS'] || process.env.MAIL_VERIFICATION_PASS || '')
+}
+
 function normalizeUserKeys(keys = []) {
   return keys.map((item) => {
-    if (item.keyHash) return { ...item, key: undefined }
-    if (!item.key) return item
-    return { ...item, keyHash: hashApiKey(item.key), fingerprint: item.fingerprint || keyFingerprint(item.key), key: undefined }
+    const keyHash = item.keyHash || (item.key ? hashApiKey(item.key) : undefined)
+    return {
+      ...item,
+      keyHash,
+      fingerprint: item.fingerprint || (item.key ? keyFingerprint(item.key) : undefined),
+      rpmLimit: normalizeLimit(item.rpmLimit, maxRequestsPerMinute),
+      rpdLimit: normalizeLimit(item.rpdLimit, maxRequestsPerDay),
+      key: undefined
+    }
   })
 }
 
@@ -292,15 +328,17 @@ async function completeGoogleAuth(req, res, url) {
   if (!profile.email || !profile.email_verified) return redirect(res, '/?auth=email_unverified')
 
   const freshStore = await readStore()
-  const existing = (freshStore.users || []).find((user) => user.googleId === profile.sub || user.email === String(profile.email).toLowerCase())
+  const profileEmail = normalizeEmail(profile.email)
+  if (!isEmailVerifiedByAdmin(freshStore, profileEmail)) return redirect(res, '/?auth=email_not_verified_by_admin')
+  const existing = (freshStore.users || []).find((user) => user.googleId === profile.sub || user.email === profileEmail)
   if (existing?.banned) return redirect(res, '/?auth=banned')
   const token = `rs_${crypto.randomBytes(24).toString('base64url')}`
   const session = { id: crypto.randomUUID(), userId: existing?.id || crypto.randomUUID(), tokenHash: hashApiKey(token), createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString() }
   const user = existing ? {
     ...existing,
     googleId: sanitizeText(profile.sub),
-    email: sanitizeText(profile.email).toLowerCase(),
-    username: sanitizeText(profile.name || profile.email),
+    email: profileEmail,
+    username: sanitizeText(profile.name || profileEmail),
     avatarUrl: existing.avatarStored ? existing.avatarUrl : sanitizeUrl(profile.picture),
     authMethod: 'google',
     emailVerified: true,
@@ -308,8 +346,8 @@ async function completeGoogleAuth(req, res, url) {
   } : {
     id: session.userId,
     googleId: sanitizeText(profile.sub),
-    email: sanitizeText(profile.email).toLowerCase(),
-    username: sanitizeText(profile.name || profile.email),
+    email: profileEmail,
+    username: sanitizeText(profile.name || profileEmail),
     avatarUrl: sanitizeUrl(profile.picture),
     avatarStored: false,
     authMethod: 'google',
@@ -375,6 +413,7 @@ function publicModel(model) {
 function adminStore(store) {
   return {
     ...redactStore(store),
+    verifiedEmails: normalizeVerifiedEmails(store.verifiedEmails || []),
     userKeys: (store.userKeys || []).map((key) => ({ ...key, keyHash: undefined, key: key.fingerprint || 'stored securely' })),
     sessions: undefined,
     users: store.users || [],
@@ -529,24 +568,28 @@ function clientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim()
 }
 
-function touchRateBucket(map, key, amount = 1, limit = maxRequestsPerMinute) {
+function touchRateBucket(map, key, amount = 1, limit = maxRequestsPerMinute, windowMs = 60_000) {
   const now = Date.now()
-  const bucket = map.get(key) || { count: 0, resetAt: now + 60_000 }
+  const bucket = map.get(key) || { count: 0, resetAt: now + windowMs }
   if (now > bucket.resetAt) {
     bucket.count = 0
-    bucket.resetAt = now + 60_000
+    bucket.resetAt = now + windowMs
   }
   bucket.count += amount
   map.set(key, bucket)
   return { ok: bucket.count <= limit, resetAt: bucket.resetAt, remaining: Math.max(0, limit - bucket.count), used: bucket.count }
 }
 
-function checkRateLimit(key) {
-  return touchRateBucket(rateBuckets, key, 1, maxRequestsPerMinute)
+function checkRateLimit(key, limit = maxRequestsPerMinute) {
+  return touchRateBucket(rateBuckets, key, 1, normalizeLimit(limit, maxRequestsPerMinute), 60_000)
+}
+
+function checkDailyRequestLimit(key, limit = maxRequestsPerDay) {
+  return touchRateBucket(dailyRequestBuckets, key, 1, normalizeLimit(limit, maxRequestsPerDay), 86_400_000)
 }
 
 function checkTokenLimit(key, tokens) {
-  return touchRateBucket(tokenBuckets, key, tokens, maxTokensPerMinute)
+  return touchRateBucket(tokenBuckets, key, tokens, maxTokensPerMinute, 60_000)
 }
 
 function isAdmin(req) {
@@ -618,7 +661,7 @@ async function authenticateUserKey(req, store) {
 
 function createUserKey(label = 'Default key') {
   const key = `rz_${crypto.randomBytes(24).toString('base64url')}`
-  return { id: crypto.randomUUID(), key, keyHash: hashApiKey(key), fingerprint: keyFingerprint(key), label, active: true, createdAt: new Date().toISOString(), lastUsedAt: null, requestCount: 0 }
+  return { id: crypto.randomUUID(), key, keyHash: hashApiKey(key), fingerprint: keyFingerprint(key), label, active: true, createdAt: new Date().toISOString(), lastUsedAt: null, requestCount: 0, rpmLimit: maxRequestsPerMinute, rpdLimit: maxRequestsPerDay }
 }
 
 function createUserKeyForUser(userId, label = 'Default key') {
@@ -731,6 +774,7 @@ function sanitizeStoreInput(store) {
   return {
     ...store,
     models: Array.isArray(store.models) ? store.models.map(sanitizeModel).filter((model) => model.id) : [],
+    verifiedEmails: normalizeVerifiedEmails(store.verifiedEmails || []),
     userKeys: normalizeUserKeys(store.userKeys || []),
     incidents: Array.isArray(store.incidents) ? store.incidents.slice(0, 200) : [],
     audit: Array.isArray(store.audit) ? store.audit.slice(0, 500) : [],
@@ -915,7 +959,28 @@ async function streamAnthropicAsOpenAi(upstream, res, modelId, routeId, startedA
   return { text: fullText }
 }
 
+function contentPartText(part) {
+  if (typeof part === 'string') return part
+  if (typeof part?.text === 'string') return part.text
+  if (typeof part?.text?.value === 'string') return part.text.value
+  return ''
+}
+
+function extractOpenAiStreamText(payload) {
+  if (!Array.isArray(payload?.choices)) return typeof payload?.delta === 'string' ? payload.delta : ''
+  return payload.choices.map((choice) => {
+    const content = choice?.delta?.content ?? choice?.message?.content
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) return content.map(contentPartText).join('')
+    if (typeof choice?.text === 'string') return choice.text
+    return ''
+  }).join('')
+}
+
 async function pipeOpenAiStream(upstream, res, routeId, startedAt) {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let fullText = ''
   res.writeHead(upstream.status, {
     ...corsHeaders(res.razeReq, { publicApi: res.razeCorsPublic }),
     'content-type': upstream.headers.get('content-type') || 'text/event-stream; charset=utf-8',
@@ -924,10 +989,32 @@ async function pipeOpenAiStream(upstream, res, routeId, startedAt) {
     'x-raze-route': routeId,
     'x-raze-latency-ms': String(Date.now() - startedAt)
   })
+  const consumeEvent = (rawEvent) => {
+    for (const line of rawEvent.split('\n')) {
+      if (!line.startsWith('data:')) continue
+      const payload = line.slice(5).trim()
+      if (!payload || payload === '[DONE]') continue
+      try {
+        fullText += extractOpenAiStreamText(JSON.parse(payload))
+      } catch {
+        // Providers sometimes send comments or partial frames; keep streaming intact.
+      }
+    }
+  }
   for await (const chunk of upstream.body) {
     res.write(chunk)
+    buffer += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, '\n')
+    while (buffer.includes('\n\n')) {
+      const splitAt = buffer.indexOf('\n\n')
+      const rawEvent = buffer.slice(0, splitAt)
+      buffer = buffer.slice(splitAt + 2)
+      consumeEvent(rawEvent)
+    }
   }
+  buffer += decoder.decode().replace(/\r\n/g, '\n')
+  if (buffer.trim()) consumeEvent(buffer)
   res.end()
+  return { text: fullText }
 }
 
 async function proxyCompletion(req, res, kind) {
@@ -936,8 +1023,10 @@ async function proxyCompletion(req, res, kind) {
   const auth = await authenticateUserKey(req, store)
   if (!auth) return sendJson(res, 401, { error: { message: 'Missing or invalid RAZE API key.', type: 'invalid_api_key' } })
 
-  const rate = checkRateLimit(auth.record.id)
-  if (!rate.ok) return sendJson(res, 429, { error: { message: 'Rate limit reached. Please slow down and try again shortly.', type: 'rate_limited', reset_at: new Date(rate.resetAt).toISOString() } })
+  const rate = checkRateLimit(auth.record.id, auth.record.rpmLimit)
+  if (!rate.ok) return sendJson(res, 429, { error: { message: 'RPM limit reached for this API key. Please slow down and try again shortly.', type: 'rpm_limited', reset_at: new Date(rate.resetAt).toISOString() } })
+  const dailyRate = checkDailyRequestLimit(auth.record.id, auth.record.rpdLimit)
+  if (!dailyRate.ok) return sendJson(res, 429, { error: { message: 'RPD limit reached for this API key. Try again after the daily reset.', type: 'rpd_limited', reset_at: new Date(dailyRate.resetAt).toISOString() } })
 
   const modelId = body.model
   const model = findRoute(store, modelId)
@@ -1024,8 +1113,10 @@ async function proxyCompletion(req, res, kind) {
       return
     }
 
-    await pipeOpenAiStream(upstream, res, model.id, started)
-    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, streamed: true }), { event: 'write_stream_log' })
+    const streamResult = await pipeOpenAiStream(upstream, res, model.id, started)
+    const outputTokens = tokenEstimateFromResponseText(streamResult.text)
+    checkTokenLimit(auth.record.id, outputTokens)
+    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, streamed: true }), { event: 'write_stream_log' })
     logEvent('info', 'completion_streamed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: upstream.status })
     trackRequestMetrics(upstream.status, Date.now() - started)
     return
@@ -1079,7 +1170,21 @@ async function handleAdmin(req, res, pathname) {
         }
       }
     })
-    const saved = await normalizeStoreSecrets(sanitizeStoreInput({ ...store, ...next, models: mergedModels, audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'config_saved' }] }))
+    const mergedUserKeys = Array.isArray(next.userKeys)
+      ? next.userKeys.map((incomingKey) => {
+        const existing = (store.userKeys || []).find((key) => key.id === incomingKey.id)
+        return {
+          ...(existing || {}),
+          ...incomingKey,
+          key: undefined,
+          keyHash: existing?.keyHash || incomingKey.keyHash,
+          fingerprint: existing?.fingerprint || incomingKey.fingerprint,
+          rpmLimit: normalizeLimit(incomingKey.rpmLimit, existing?.rpmLimit || maxRequestsPerMinute),
+          rpdLimit: normalizeLimit(incomingKey.rpdLimit, existing?.rpdLimit || maxRequestsPerDay)
+        }
+      })
+      : store.userKeys
+    const saved = await normalizeStoreSecrets(sanitizeStoreInput({ ...store, ...next, models: mergedModels, userKeys: mergedUserKeys, audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'config_saved' }] }))
     await writeStore(saved)
     return sendJson(res, 200, adminStore(saved))
   }
@@ -1123,19 +1228,21 @@ async function handleAdmin(req, res, pathname) {
   }
   if (req.method === 'POST' && pathname.startsWith('/api/admin/keys/')) {
     const keyId = pathname.split('/')[4]
-    const { active } = await readBody(req)
-    const saved = { ...store, userKeys: (store.userKeys || []).map((key) => key.id === keyId ? { ...key, active: Boolean(active) } : key) }
+    const { active, rpmLimit, rpdLimit } = await readBody(req)
+    const saved = { ...store, userKeys: normalizeUserKeys((store.userKeys || []).map((key) => key.id === keyId ? { ...key, active: active === undefined ? key.active : Boolean(active), rpmLimit: normalizeLimit(rpmLimit, key.rpmLimit || maxRequestsPerMinute), rpdLimit: normalizeLimit(rpdLimit, key.rpdLimit || maxRequestsPerDay) } : key)) }
     await writeStore(saved)
     return sendJson(res, 200, adminStore(saved))
   }
   if (req.method === 'POST' && pathname === '/api/admin/maintenance') {
-    const { clearModels, clearIncidents, clearKeys } = await readBody(req)
+    const { clearModels, clearIncidents, clearKeys, clearUsers, clearSessions } = await readBody(req)
     const saved = {
       ...store,
       models: clearModels ? [] : store.models,
       incidents: clearIncidents ? [] : store.incidents,
-      userKeys: clearKeys ? [] : store.userKeys,
-      audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'maintenance', clearModels: Boolean(clearModels), clearIncidents: Boolean(clearIncidents), clearKeys: Boolean(clearKeys) }]
+      users: clearUsers ? [] : store.users,
+      sessions: clearSessions || clearUsers ? [] : store.sessions,
+      userKeys: clearKeys || clearUsers ? [] : store.userKeys,
+      audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'maintenance', clearModels: Boolean(clearModels), clearIncidents: Boolean(clearIncidents), clearKeys: Boolean(clearKeys || clearUsers), clearUsers: Boolean(clearUsers), clearSessions: Boolean(clearSessions || clearUsers) }]
     }
     await writeStore(saved)
     return sendJson(res, 200, adminStore(saved))
@@ -1155,6 +1262,26 @@ async function handleAdmin(req, res, pathname) {
     return sendJson(res, 200, { ok: true, name: safeName, ...saved })
   }
   return sendJson(res, 404, { error: 'admin_route_not_found' })
+}
+
+async function handleVerifiedAutomation(req, res) {
+  const secret = verificationSecret()
+  if (!secret) return sendJson(res, 503, { error: { message: 'Mail verification secret is not configured.', type: 'verification_not_configured' } })
+  const auth = String(req.headers.authorization || '')
+  if (!auth.startsWith('Bearer ') || !safeCompare(auth.slice(7).trim(), secret)) return sendJson(res, 401, { error: { message: 'Invalid verification authorization.', type: 'verification_auth_required' } })
+
+  const body = await readBody(req)
+  const email = normalizeEmail(body.email)
+  if (!isValidEmail(email)) return sendJson(res, 400, { error: { message: 'A valid email is required.', type: 'invalid_email' } })
+
+  const store = await readStore()
+  const verifiedEmails = normalizeVerifiedEmails(store.verifiedEmails || [])
+  const added = !verifiedEmails.includes(email)
+  const saved = added
+    ? { ...store, verifiedEmails: [...verifiedEmails, email], audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'email_verified_automation', email }] }
+    : store
+  if (added) await writeStore(saved)
+  return sendJson(res, 200, { ok: true, email, added })
 }
 
 async function serveStatic(req, res, pathname) {
@@ -1193,6 +1320,7 @@ const server = createServer(async (req, res) => {
     }
     if (pathname === '/api/auth/google' && req.method === 'GET') return startGoogleAuth(req, res)
     if (pathname === '/auth' && req.method === 'GET') return completeGoogleAuth(req, res, url)
+    if (pathname === '/verified' && req.method === 'POST') return handleVerifiedAutomation(req, res)
     if (pathname === '/api/config' && req.method === 'GET') return sendJson(res, 200, { models: publicModels(await readStore()) })
     if (isOpenAiBasePath(pathname) && req.method === 'GET') return sendJson(res, 200, { ok: true, service: 'raze', object: 'api', endpoints: { models: '/v1/models', chat_completions: '/v1/chat/completions' } }, { 'cache-control': 'no-store' })
     if (isOpenAiBasePath(pathname) && req.method === 'POST') return proxyCompletion(req, res, 'chat')
@@ -1232,6 +1360,7 @@ const server = createServer(async (req, res) => {
       const store = await readStore()
       const session = authenticateSession(req, store)
       if (!session || session.user.authMethod !== 'google' || !session.user.emailVerified) return sendJson(res, 401, { error: { message: 'Sign in with Google before generating an API key.', type: 'google_session_required' } })
+      if (!isEmailVerifiedByAdmin(store, session.user.email)) return sendJson(res, 403, { error: { message: 'Your email is not verified for RAZE access. Please contact an admin.', type: 'email_not_verified_by_admin' } })
       const body = await readBody(req)
       // Deactivate all existing keys for this user so only one active key exists at a time
       const deactivated = (store.userKeys || []).map((k) => k.userId === session.user.id ? { ...k, active: false } : k)
