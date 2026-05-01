@@ -20,7 +20,7 @@ type AdminConfig = {
 
 type IncidentDetail = { code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string | null; userKeyId?: string }
 type PlaygroundContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } } | { type: 'file'; file: { name: string; mimeType: string; dataUrl: string } }
-type PlaygroundMessage = { role: 'user' | 'assistant'; content: string | PlaygroundContentPart[] }
+type PlaygroundMessage = { role: 'user' | 'assistant'; content: string | PlaygroundContentPart[]; attachments?: PlaygroundAttachment[] }
 type PlaygroundAttachment = { id: string; name: string; type: string; dataUrl: string; kind: 'image' | 'file' }
 type RenderSegment = { type: 'thinking' | 'markdown'; content: string; closed?: boolean }
 type ConfirmState = { open: boolean; title: string; body: string; confirmLabel?: string; tone?: 'default' | 'danger'; onConfirm: () => void }
@@ -80,12 +80,12 @@ function formatDate(value?: string | null) {
 
 function fingerprint(value?: string) {
   if (!value) return 'hidden'
-  return value.length <= 10 ? value : `${value.slice(0, 6)}â€¦${value.slice(-4)}`
+  return value.length <= 10 ? value : `${value.slice(0, 6)}...${value.slice(-4)}`
 }
 
 function maskApiKey(value: string) {
-  if (!value) return 'â€¢'.repeat(24)
-  return 'â€¢'.repeat(Math.max(24, Math.min(value.length, 42)))
+  if (!value) return '*'.repeat(24)
+  return '*'.repeat(Math.max(24, Math.min(value.length, 42)))
 }
 
 function normalizeAliasInput(value: string) {
@@ -374,7 +374,7 @@ function App() {
         {view === 'Playground' && <Playground models={visibleModels} userApiKey={userApiKey} error={playgroundError} setError={setPlaygroundError} />}
         {view === 'Dashboard' && <Dashboard setView={setView} openLogin={() => setLoginOpen(true)} userApiKey={userApiKey} setUserApiKey={setUserApiKey} user={user} setUser={setUser} logout={logout} openConfirm={openConfirm} />}
         {view === 'Admin' && adminUnlocked && selectedModel && <AdminPanel models={models} adminConfig={adminConfig} updateAdminConfig={updateAdminConfig} selectedModel={selectedModel} selectedModelId={selectedModelId} setSelectedModelId={setSelectedModelId} adminSection={adminSection} setAdminSection={setAdminSection} updateModel={updateModel} addModel={addModel} deleteModel={deleteModel} saveConfig={saveConfig} saveSecret={saveSecret} syncState={syncState} toggleCapability={(cap) => toggleCapability(selectedModel, updateModel, cap)} refreshAdmin={refreshAdmin} adminKey={adminKey} openConfirm={openConfirm} />}
-        {view === 'Admin' && adminUnlocked && !selectedModel && <div style={{ padding: '60px 5vw' }}><p style={{ fontFamily: 'ui-monospace, monospace', fontSize: '.9rem' }}>Loading routes from backendâ€¦</p></div>}
+        {view === 'Admin' && adminUnlocked && !selectedModel && <div style={{ padding: '60px 5vw' }}><p style={{ fontFamily: 'ui-monospace, monospace', fontSize: '.9rem' }}>Loading routes from backend...</p></div>}
         {view === 'Admin' && !adminUnlocked && <LockedAdmin openGate={() => setAdminGateOpen(true)} />}
         {view === 'Changelog' && <Changelog />}
       </main>
@@ -388,7 +388,7 @@ function App() {
 }
 
 function Landing({ setView, openLogin, models, focusedCard, setFocusedCard, copyId, copied, stats }: { setView: (view: View) => void; openLogin: () => void; models: Model[]; focusedCard: string | null; setFocusedCard: (id: string | null) => void; copyId: (id: string) => void; copied: string; stats: { modelCount: number; authMode: string; adminUnlocked: boolean; cacheModes: number; providerCount: number; access: string } }) {
-  return <section className="hero view-shell"><div className="hero-copy"><p className="eyebrow">secure ai router / admin-configured / community access</p><h1>Raze router , built by me and my bestfriend claude ðŸ‘</h1><p className="hero-lede">RAZE is a production-ready AI router for model discovery, provider routing, exact-match caching, Google-authenticated access, and real-time streaming through a single OpenAI-style interface.</p><div className="hero-actions"><button className="primary" onClick={openLogin}>{'Sign in with Google'}</button><button className="secondary" onClick={() => setView('Playground')}>Open Playground</button><button className="secondary" onClick={() => setView('Models')}>Explore Models</button></div></div><TerminalHero /><StatsBar stats={stats} /><section className="showcase-panel"><div><p className="eyebrow">model.cards</p><h2>Configured by admins, rendered live.</h2><p>Cards use admin-defined metadata and stay aligned with the public registry without exposing provider secrets or internal endpoints.</p></div><div className="showcase-grid">{models.length ? models.map((model) => <ModelCard key={model.id} model={model} mode="showcase" focused={focusedCard === model.id} dimmed={Boolean(focusedCard && focusedCard !== model.id)} onFocus={setFocusedCard} onCopy={copyId} copied={copied === model.id} />) : <EmptyState title="No featured routes" body="Feature a model in Admin to show it here." />}</div></section></section>
+  return <section className="hero view-shell"><div className="hero-copy"><p className="eyebrow">secure ai router / admin-configured / community access</p><h1>Raze router, built by me and my bestfriend claude &#128077;</h1><p className="hero-lede">RAZE is a production-ready AI router for model discovery, provider routing, exact-match caching, Google-authenticated access, and real-time streaming through a single OpenAI-style interface.</p><div className="hero-actions"><button className="primary" onClick={openLogin}>{'Sign in with Google'}</button><button className="secondary" onClick={() => setView('Playground')}>Open Playground</button><button className="secondary" onClick={() => setView('Models')}>Explore Models</button></div></div><TerminalHero /><StatsBar stats={stats} /><section className="showcase-panel"><div><p className="eyebrow">model.cards</p><h2>Configured by admins, rendered live.</h2><p>Cards use admin-defined metadata and stay aligned with the public registry without exposing provider secrets or internal endpoints.</p></div><div className="showcase-grid">{models.length ? models.map((model) => <ModelCard key={model.id} model={model} mode="showcase" focused={focusedCard === model.id} dimmed={Boolean(focusedCard && focusedCard !== model.id)} onFocus={setFocusedCard} onCopy={copyId} copied={copied === model.id} />) : <EmptyState title="No featured routes" body="Feature a model in Admin to show it here." />}</div></section></section>
 }
 
 function TerminalHero() {
@@ -434,13 +434,32 @@ function MarkdownBlock({ content }: { content: string }) {
 }
 
 function ThinkingBlock({ content, closed }: { content: string; closed?: boolean }) {
-  return <details className="thinking-block" open={!closed}><summary>{closed ? 'Thinking hidden' : 'Thinkingâ€¦'}</summary><div className="thinking-block-body"><MarkdownBlock content={content.trim() || '_No reasoning text yet._'} /></div></details>
+  return <details className="thinking-block" open={!closed}><summary>{closed ? 'Thinking hidden' : 'Thinking...'}</summary><div className="thinking-block-body"><MarkdownBlock content={content.trim() || '_No reasoning text yet._'} /></div></details>
 }
 
-function MessageContent({ content }: { content: string | PlaygroundContentPart[] }) {
+function completionMessages(messages: PlaygroundMessage[]) {
+  return messages.map(({ role, content }) => ({ role, content }))
+}
+
+function attachmentsFromContent(content: string | PlaygroundContentPart[]) {
+  if (typeof content === 'string') return []
+  const files: PlaygroundAttachment[] = []
+  content.forEach((part, index) => {
+    if (part.type === 'image_url') files.push({ id: `image-${index}`, name: `Image ${index + 1}`, type: 'image', dataUrl: part.image_url.url, kind: 'image' })
+    if (part.type === 'file') files.push({ id: `file-${index}`, name: part.file.name, type: part.file.mimeType, dataUrl: part.file.dataUrl, kind: 'file' })
+  })
+  return files
+}
+
+function MessageAttachments({ attachments }: { attachments: PlaygroundAttachment[] }) {
+  return <div className="playground-message-attachments">{attachments.map((file) => <div className="playground-attachment playground-message-attachment" key={file.id}><div className="playground-attachment-preview">{file.kind === 'image' ? <img src={file.dataUrl} alt={file.name} /> : <span className="playground-attachment-file-icon">&#9733;</span>}</div><div className="playground-attachment-meta"><b>{file.name}</b><small>{file.kind === 'image' ? 'image preview' : file.type}</small></div></div>)}</div>
+}
+
+function MessageContent({ content, attachments = [] }: { content: string | PlaygroundContentPart[]; attachments?: PlaygroundAttachment[] }) {
   const normalized = typeof content === 'string' ? content : content.filter((part) => part.type === 'text').map((part) => (part as { type: 'text'; text: string }).text).join('\n\n')
   const segments = useMemo(() => parseThinkingSegments(normalized), [normalized])
-  return <div className="playground-rendered">{segments.map((segment, index) => segment.type === 'thinking' ? <ThinkingBlock key={`thinking-${index}`} content={segment.content} closed={segment.closed} /> : <MarkdownBlock key={`markdown-${index}`} content={segment.content} />)}</div>
+  const renderedAttachments = attachments.length ? attachments : attachmentsFromContent(content)
+  return <div className="playground-rendered">{normalized.trim() ? segments.map((segment, index) => segment.type === 'thinking' ? <ThinkingBlock key={`thinking-${index}`} content={segment.content} closed={segment.closed} /> : <MarkdownBlock key={`markdown-${index}`} content={segment.content} />) : null}{renderedAttachments.length ? <MessageAttachments attachments={renderedAttachments} /> : null}</div>
 }
 
 function Playground({ models, userApiKey, error, setError }: { models: Model[]; userApiKey: string; error: string; setError: (value: string) => void }) {
@@ -471,7 +490,7 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
 
   const requestPreview = model ? {
     model: model.id,
-    messages: [{ role: 'system', content: systemPrompt }, ...messages, { role: 'user', content: prompt || '<prompt>' }],
+    messages: [{ role: 'system', content: systemPrompt }, ...completionMessages(messages), { role: 'user', content: prompt || '<prompt>' }],
     attachments: attachments.map((file) => ({ name: file.name, type: file.type })),
     stream: true,
   } : null
@@ -533,7 +552,9 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
       const trimmedPrompt = prompt.trim()
       const queuedAttachments = [...attachments]
       const userContent = buildUserContent(trimmedPrompt, queuedAttachments)
-      const outgoing = [...messages, { role: 'user' as const, content: userContent }]
+      const userMessage: PlaygroundMessage = { role: 'user', content: userContent, attachments: queuedAttachments }
+      const outgoing = [...messages, userMessage]
+      const apiMessages = completionMessages(outgoing)
       setMessages(outgoing)
       setPrompt('')
       setAttachments([])
@@ -544,7 +565,7 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
       let streamedText = ''
       setMessages([...outgoing, { role: 'assistant', content: '' }])
       setResult('streaming response...')
-      await sendChatCompletionStream({ model: model.id, messages: [{ role: 'system', content: systemPrompt }, ...outgoing], stream: true }, (delta) => {
+      await sendChatCompletionStream({ model: model.id, messages: [{ role: 'system', content: systemPrompt }, ...apiMessages], stream: true }, (delta) => {
         streamedText += delta
         setResult(streamedText)
         setMessages([...outgoing, { role: 'assistant', content: streamedText }])
@@ -563,7 +584,7 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
     }
   }
 
-  return <section className="playground-shell"><header className="playground-topbar"><div className="playground-topbar-left"><span className="playground-badge">Chat</span><div className="playground-title-group"><div className="playground-title-main">RAZE Conversation</div><div className="playground-title-sub">{model?.name || 'No route selected'}</div></div></div><div className="playground-topbar-right"><span className={`playground-status ${model?.status === 'Online' ? 'online' : ''}`}>{model?.status || 'No model'}</span><button className="playground-ghost" onClick={() => setDebugOpen((value) => !value)}>{debugOpen ? 'Hide Debug' : 'Safe Debug'}</button></div></header><div className="playground-workspace"><main className="playground-chat-panel"><div className="playground-config playground-config-framed"><div className="playground-field-row"><label className="playground-field-label">Route</label><select value={modelId} onChange={(event) => setModelId(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="playground-field-row"><label className="playground-field-label">System</label><textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} placeholder="System prompt" /></div>{error ? <div className="playground-alert">{error}</div> : null}</div><div ref={streamRef} className="playground-chat-stream">{messages.length ? messages.map((message, index) => <article key={index} className={`playground-message ${message.role}`}><span>{message.role}</span><MessageContent content={message.content} /></article>) : <div className="playground-empty"><div className="playground-empty-icon">â—ˆ</div><span>No messages yet.</span><small>Pick a route, attach images or files, and send a prompt through the protected router.</small></div>}</div><div className="playground-composer"><div className="playground-composer-box"><textarea ref={composerRef} value={prompt} onInput={(event) => resizeComposer(event.currentTarget)} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !pending) { event.preventDefault(); submit() } }} placeholder="Send a message through the selected route..." /><div className="playground-composer-actions"><label className="playground-icon-btn" title="Attach files">ï¼‹<input type="file" multiple onChange={(event) => attachFiles(event.target.files)} /></label><button className="playground-icon-btn send" onClick={submit} disabled={pending}>{pending ? 'â€¦' : 'â†‘'}</button></div></div>{attachments.length ? <div className="playground-attachments">{attachments.map((file) => <div className="playground-attachment" key={file.id}><div className="playground-attachment-preview">{file.kind === 'image' ? <img src={file.dataUrl} alt={file.name} /> : <span className="playground-attachment-file-icon">âœ¦</span>}</div><div className="playground-attachment-meta"><b>{file.name}</b><small>{file.kind === 'image' ? 'image preview' : file.type}</small></div><button type="button" onClick={() => removeAttachment(file.id)}>x</button></div>)}</div> : null}<div className="playground-composer-hint"><span>{userApiKey ? 'Bearer key loaded from dashboard' : 'No bearer key loaded'}</span><span>{pending ? 'Sendingâ€¦' : 'Enter to send  -  Shift+Enter for newline'}</span></div></div></main><aside className={`playground-debug-panel ${debugOpen ? '' : 'hidden'}`}><div className="playground-debug-header"><span>Safe Debug</span><span>{model?.id || 'no-model'}</span></div><div className="playground-debug-body"><div><div className="playground-debug-title">Request preview</div><pre className="playground-code-block">{JSON.stringify(requestPreview, null, 2)}</pre></div><div><div className="playground-debug-title">Response</div><pre className="playground-code-block response">{result}</pre></div></div></aside></div></section>
+  return <section className="playground-shell"><header className="playground-topbar"><div className="playground-topbar-left"><span className="playground-badge">Chat</span><div className="playground-title-group"><div className="playground-title-main">RAZE Conversation</div><div className="playground-title-sub">{model?.name || 'No route selected'}</div></div></div><div className="playground-topbar-right"><span className={`playground-status ${model?.status === 'Online' ? 'online' : ''}`}>{model?.status || 'No model'}</span><button className="playground-ghost" onClick={() => setDebugOpen((value) => !value)}>{debugOpen ? 'Hide Debug' : 'Safe Debug'}</button></div></header><div className="playground-workspace"><main className="playground-chat-panel"><div className="playground-config playground-config-framed"><div className="playground-field-row"><label className="playground-field-label">Route</label><select value={modelId} onChange={(event) => setModelId(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="playground-field-row"><label className="playground-field-label">System</label><textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} placeholder="System prompt" /></div>{error ? <div className="playground-alert">{error}</div> : null}</div><div ref={streamRef} className="playground-chat-stream">{messages.length ? messages.map((message, index) => <article key={index} className={`playground-message ${message.role}`}><span>{message.role}</span><MessageContent content={message.content} attachments={message.attachments} /></article>) : <div className="playground-empty"><div className="playground-empty-icon" aria-hidden="true">&#9670;</div><span>No messages yet.</span><small>Pick a route, attach images or files, and send a prompt through the protected router.</small></div>}</div><div className="playground-composer"><div className="playground-composer-box"><textarea ref={composerRef} value={prompt} onInput={(event) => resizeComposer(event.currentTarget)} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !pending) { event.preventDefault(); submit() } }} placeholder="Send a message through the selected route..." /><div className="playground-composer-actions"><label className="playground-icon-btn" title="Attach files">+<input type="file" multiple onChange={(event) => attachFiles(event.target.files)} /></label><button className="playground-icon-btn send" onClick={submit} disabled={pending}>{pending ? '...' : 'Send'}</button></div></div>{attachments.length ? <div className="playground-attachments">{attachments.map((file) => <div className="playground-attachment" key={file.id}><div className="playground-attachment-preview">{file.kind === 'image' ? <img src={file.dataUrl} alt={file.name} /> : <span className="playground-attachment-file-icon">&#9733;</span>}</div><div className="playground-attachment-meta"><b>{file.name}</b><small>{file.kind === 'image' ? 'image preview' : file.type}</small></div><button type="button" onClick={() => removeAttachment(file.id)}>x</button></div>)}</div> : null}<div className="playground-composer-hint"><span>{userApiKey ? 'Bearer key loaded from dashboard' : 'No bearer key loaded'}</span><span>{pending ? 'Sending...' : 'Enter to send  -  Shift+Enter for newline'}</span></div></div></main><aside className={`playground-debug-panel ${debugOpen ? '' : 'hidden'}`}><div className="playground-debug-header"><span>Safe Debug</span><span>{model?.id || 'no-model'}</span></div><div className="playground-debug-body"><div><div className="playground-debug-title">Request preview</div><pre className="playground-code-block">{JSON.stringify(requestPreview, null, 2)}</pre></div><div><div className="playground-debug-title">Response</div><pre className="playground-code-block response">{result}</pre></div></div></aside></div></section>
 }
 
 function Dashboard({ setView, openLogin, userApiKey, setUserApiKey, user, setUser, logout, openConfirm }: { setView: (view: View) => void; openLogin: () => void; userApiKey: string; setUserApiKey: (value: string) => void; user: UserProfile | null; setUser: (user: UserProfile) => void; logout: () => void; openConfirm: (title: string, body: string, onConfirm: () => void, confirmLabel?: string, tone?: 'default' | 'danger') => void }) {

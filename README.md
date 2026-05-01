@@ -6,7 +6,7 @@ RAZE is completely free for everyone. No subscriptions, billing, paid plans, upg
 
 ## Current version
 
-`0.4.1`
+`v0.4.5`
 
 ## Architecture
 
@@ -17,39 +17,45 @@ RAZE is completely free for everyone. No subscriptions, billing, paid plans, upg
 
 ## Features
 
-- Session-gated API key generation (keys require a valid user profile)
+- Session-gated API key generation with admin-managed verified email access
 - Hashed key storage with fingerprint-only display in admin
+- Per-key RPM/RPD controls plus global defaults for newly generated keys
 - Request logging with input/output/total token estimates and incident codes
 - Context-length validation before provider calls
 - Rate limiting and request size limits
 - Provider secret isolation (keys never stored in model config)
-- Dark chat playground with safe debug preview (no provider brand names)
-- Admin panels for users, keys, request logs, and incidents
+- Dark chat playground with safe debug preview and sent-message attachments
+- Admin panels for verified users, keys, request logs, and incidents
 - CORS origin configuration, admin key authentication
 - PostgreSQL and Redis support with local JSON fallback
 - Graceful shutdown for Railway redeployments
 
 ## API endpoints
 
-| Method | Path                  | Auth         | Description                          |
-|--------|-----------------------|--------------|--------------------------------------|
-| GET    | /health               | None         | Health check                         |
-| GET    | /api/config           | None         | Public model list                    |
-| GET    | /v1/models            | None         | OpenAI-compatible model list         |
-| GET    | /api/session          | Session      | Get current user                     |
-| POST   | /api/session          | None         | Create or resume session             |
-| POST   | /api/keys             | Session      | Generate API key                     |
-| POST   | /v1/chat/completions  | Bearer rz_*  | Chat completion proxy                |
-| POST   | /v1/messages           | Bearer rz_*  | Anthropic messages proxy             |
-| GET    | /api/admin/config     | Admin        | Full store (redacted secrets)        |
-| PUT    | /api/admin/config     | Admin        | Save store                           |
-| POST   | /api/admin/secrets    | Admin        | Save provider secret                 |
-| POST   | /api/admin/keys       | Admin        | Create admin API key                 |
-| POST   | /api/admin/test-route | Admin        | Test route connectivity              |
-| POST   | /api/admin/users/:id  | Admin        | Ban/unban user                       |
-| POST   | /api/admin/keys/:id   | Admin        | Activate/revoke key                  |
-| GET    | /api/admin/incidents/:code | Admin   | View incident details                |
-| POST   | /api/admin/maintenance | Admin       | Clear models/incidents/keys          |
+| Method | Path                       | Auth         | Description                          |
+|--------|----------------------------|--------------|--------------------------------------|
+| GET    | /health                    | None         | Health check                         |
+| GET    | /api/config                | None         | Public model list                    |
+| GET    | /v1/models                 | None         | OpenAI-compatible model list         |
+| GET    | /api/session               | Session      | Get current user                     |
+| POST   | /api/session               | None         | Create or resume session             |
+| POST   | /api/keys                  | Session      | Generate API key                     |
+| POST   | /v1/chat/completions       | Bearer rz_*  | Chat completion proxy                |
+| POST   | /v1/messages               | Bearer rz_*  | Anthropic messages proxy             |
+| POST   | /verified                  | Shared pass  | Discord/bot email verification       |
+| GET    | /api/admin/config          | Admin        | Full store (redacted secrets)        |
+| PUT    | /api/admin/config          | Admin        | Save store                           |
+| POST   | /api/admin/secrets         | Admin        | Save provider secret                 |
+| POST   | /api/admin/keys            | Admin        | Create admin API key                 |
+| DELETE | /api/admin/keys            | Admin        | Delete all user API keys             |
+| POST   | /api/admin/test-route      | Admin        | Test route connectivity              |
+| POST   | /api/admin/users/:id       | Admin        | Ban/unban user                       |
+| DELETE | /api/admin/users/:id       | Admin        | Delete one user account              |
+| DELETE | /api/admin/users           | Admin        | Delete all users, sessions, and keys |
+| POST   | /api/admin/keys/:id        | Admin        | Activate/revoke key                  |
+| DELETE | /api/admin/keys/:id        | Admin        | Delete one user API key              |
+| GET    | /api/admin/incidents/:code | Admin        | View incident details                |
+| POST   | /api/admin/maintenance     | Admin        | Clear models/incidents/keys          |
 
 ## Run locally
 
@@ -82,17 +88,19 @@ npm start
 
 ## Environment variables
 
-| Variable                     | Default              | Description                         |
-|------------------------------|----------------------|-------------------------------------|
-| `PORT`                     | 3000                 | Server port (Railway injects this)  |
-| `RAZE_ADMIN_KEY`           | (empty, admin disabled) | Admin authentication key        |
-| `RAZE_DATA_DIR`            | .data                | Local JSON storage directory        |
-| `RAZE_PROVIDER_KEY`        | (none)               | Default provider API key            |
-| `RAZE_CORS_ORIGIN`         | *                    | Allowed CORS origin                 |
-| `RAZE_RATE_LIMIT_PER_MINUTE`| 60                  | Requests per minute per bucket      |
-| `RAZE_MAX_BODY_BYTES`      | 1000000              | Max request body size               |
-| `DATABASE_URL`             | (none)               | PostgreSQL connection string        |
-| `REDIS_URL`                | (none)               | Redis connection string             |
+| Variable                    | Default                 | Description                         |
+|-----------------------------|-------------------------|-------------------------------------|
+| `PORT`                      | 3000                    | Server port (Railway injects this)  |
+| `RAZE_ADMIN_KEY`            | (empty, admin disabled) | Admin authentication key            |
+| `RAZE_DATA_DIR`             | .data                   | Local JSON storage directory        |
+| `RAZE_PROVIDER_KEY`         | (none)                  | Default provider API key            |
+| `RAZE_CORS_ORIGIN`          | *                       | Allowed CORS origin                 |
+| `RAZE_RATE_LIMIT_PER_MINUTE`| 60                      | Requests per minute per key         |
+| `RAZE_REQUEST_LIMIT_PER_DAY`| 600                     | Requests per day per key            |
+| `RAZE_MAX_BODY_BYTES`       | 1000000                 | Max request body size               |
+| `MAIL_VERIFICATION_PASS`    | (none)                  | Shared pass for `/verified`         |
+| `DATABASE_URL`              | (none)                  | PostgreSQL connection string        |
+| `REDIS_URL`                 | (none)                  | Redis connection string             |
 
 ## Security notes
 
