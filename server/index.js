@@ -631,7 +631,11 @@ function openAiModelList(store) {
 }
 
 function findRoute(store, id) {
-  return store.models.find((model) => model.id === id || model.providerConfig?.modelId === id)
+  const routeId = sanitizeText(id)
+  const exactRoute = store.models.find((model) => model.id === routeId)
+  if (exactRoute) return exactRoute
+  const providerMatches = store.models.filter((model) => model.providerConfig?.modelId === routeId)
+  return providerMatches.length === 1 ? providerMatches[0] : undefined
 }
 
 function flattenMessageContent(content) {
@@ -767,6 +771,7 @@ function sanitizeModel(model) {
     visibility: ['Public', 'Hidden', 'Staff Only', 'Preview'].includes(model.visibility) ? model.visibility : 'Hidden',
     launchAvailable: Boolean(model.launchAvailable),
     sortPriority: Number(model.sortPriority || 999),
+    rpdExempt: Boolean(model.rpdExempt),
     providerConfig: {
       provider: ['OpenAI Compatible', 'Anthropic', 'Custom'].includes(providerConfig.provider) ? providerConfig.provider : 'OpenAI Compatible',
       modelId: sanitizeProviderModelId(providerConfig.modelId),
@@ -823,20 +828,24 @@ async function saveProviderSecret(secretName, value) {
   return { persisted: 'postgres' }
 }
 
+function stableCacheValue(value) {
+  if (Array.isArray(value)) return value.map(stableCacheValue)
+  if (!value || typeof value !== 'object') return value
+  return Object.keys(value).sort().reduce((acc, key) => {
+    const normalized = stableCacheValue(value[key])
+    if (normalized !== undefined) acc[key] = normalized
+    return acc
+  }, {})
+}
+
 function makeCacheKey(model, body) {
-  const messages = body.messages || []
   const upstreamModelId = providerModelId(model) || model.id
-  const key = JSON.stringify({
-    model: model.id,
+  const { model: requestedModel, stream, ...requestShape } = body || {}
+  const key = JSON.stringify(stableCacheValue({
+    route: model.id,
     providerModel: upstreamModelId,
-    messages,
-    system: body.system,
-    temperature: body.temperature,
-    top_p: body.top_p,
-    max_tokens: body.max_tokens,
-    tools: body.tools,
-    attachments: body.attachments
-  })
+    request: requestShape
+  }))
   return `${cacheNamespace}:${hashApiKey(key)}`
 }
 
@@ -1039,13 +1048,16 @@ async function proxyCompletion(req, res, kind) {
 
   const rate = checkRateLimit(auth.record.id, auth.record.rpmLimit)
   if (!rate.ok) return sendJson(res, 429, { error: { message: 'RPM limit reached for this API key. Please slow down and try again shortly.', type: 'rpm_limited', reset_at: new Date(rate.resetAt).toISOString() } })
-  const dailyRate = checkDailyRequestLimit(auth.record.id, auth.record.rpdLimit)
-  if (!dailyRate.ok) return sendJson(res, 429, { error: { message: 'RPD limit reached for this API key. Try again after the daily reset.', type: 'rpd_limited', reset_at: new Date(dailyRate.resetAt).toISOString() } })
 
-  const modelId = body.model
+  const modelId = sanitizeText(body.model)
   const model = findRoute(store, modelId)
   if (!model) return sendJson(res, 404, { error: { message: `Unknown model: ${modelId}`, type: 'model_not_found' } })
   if (model.status !== 'Online') return sendJson(res, 503, { error: { message: `Model is ${model.status}`, type: 'model_unavailable' } })
+  const rpdExempt = model.rpdExempt === true
+  if (!rpdExempt) {
+    const dailyRate = checkDailyRequestLimit(auth.record.id, auth.record.rpdLimit)
+    if (!dailyRate.ok) return sendJson(res, 429, { error: { message: 'RPD limit reached for this API key. Try again after the daily reset.', type: 'rpd_limited', reset_at: new Date(dailyRate.resetAt).toISOString() } })
+  }
 
   const sentTokens = tokenEstimateFromMessages(body.messages || [])
   const tokenRate = checkTokenLimit(auth.record.id, sentTokens)
@@ -1083,14 +1095,12 @@ async function proxyCompletion(req, res, kind) {
     const cached = await readCachedResponse(cacheKey)
     if (cached) {
       scheduleBackground(() => touchUserKey(store, auth.keyHash), { event: 'touch_user_key_cached' })
-      scheduleBackground(() => writeRequestLog(store, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 200, inputTokens: sentTokens, outputTokens: Number(cached?.usage?.completion_tokens || 0), totalTokens: Number(cached?.usage?.total_tokens || sentTokens), cacheHit: true }), { event: 'write_request_log_cached' })
-      logEvent('info', 'completion_cache_hit', { model: model.id, userId: auth.user.id, keyId: auth.record.id })
+      scheduleBackground(() => writeRequestLog(store, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 200, inputTokens: sentTokens, outputTokens: Number(cached?.usage?.completion_tokens || 0), totalTokens: Number(cached?.usage?.total_tokens || sentTokens), cacheHit: true, rpdExempt }), { event: 'write_request_log_cached' })
+      logEvent('info', 'completion_cache_hit', { model: model.id, userId: auth.user.id, keyId: auth.record.id, rpdExempt })
       trackRequestMetrics(200, 0)
       return sendJson(res, 200, cached, { 'x-raze-cache': 'hit', 'x-raze-route': model.id })
     }
   }
-  if (cacheKey) metrics.cacheMisses += 1
-
   const started = Date.now()
   let upstream
   try {
@@ -1098,8 +1108,8 @@ async function proxyCompletion(req, res, kind) {
   } catch (error) {
     metrics.providerErrors += 1
     const incident = createIncident(await readStore(), { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', status: 0, upstream: error instanceof Error ? error.message : 'provider_fetch_failed', userKeyId: auth.record.id })
-    scheduleBackground(() => writeIncidentAndRequestLog(incident.incident, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens }), { event: 'write_fetch_error_incident_log' })
-    logEvent('error', 'provider_fetch_failed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, message: error instanceof Error ? error.message : 'unknown_error' })
+    scheduleBackground(() => writeIncidentAndRequestLog(incident.incident, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, rpdExempt }), { event: 'write_fetch_error_incident_log' })
+    logEvent('error', 'provider_fetch_failed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, rpdExempt, message: error instanceof Error ? error.message : 'unknown_error' })
     trackRequestMetrics(502, Date.now() - started)
     return sendJson(res, 502, { error: { message: `The router is unavailable for now. Error code ${incident.code}.`, type: 'router_unavailable', code: incident.code } })
   }
@@ -1108,8 +1118,8 @@ async function proxyCompletion(req, res, kind) {
     metrics.providerErrors += 1
     const providerText = await upstream.text()
     const incident = createIncident(await readStore(), { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', status: upstream.status, upstream: providerText.slice(0, 8000), userKeyId: auth.record.id })
-    scheduleBackground(() => writeIncidentAndRequestLog(incident.incident, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens }), { event: 'write_upstream_error_incident_log' })
-    logEvent('warn', 'provider_response_failed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, status: upstream.status })
+    scheduleBackground(() => writeIncidentAndRequestLog(incident.incident, { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 502, inputTokens: sentTokens, outputTokens: 0, totalTokens: sentTokens, rpdExempt }), { event: 'write_upstream_error_incident_log' })
+    logEvent('warn', 'provider_response_failed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', keyId: auth.record.id, status: upstream.status, rpdExempt })
     trackRequestMetrics(502, Date.now() - started)
     return sendJson(res, 502, { error: { message: `The router is unavailable for now. Error code ${incident.code}.`, type: 'router_unavailable', code: incident.code } })
   }
@@ -1121,8 +1131,8 @@ async function proxyCompletion(req, res, kind) {
       const streamResult = await streamAnthropicAsOpenAi(upstream, res, model.id, model.id, started)
       const outputTokens = tokenEstimateFromResponseText(streamResult.text)
       checkTokenLimit(auth.record.id, outputTokens)
-      scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 200, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, streamed: true }), { event: 'write_stream_log' })
-      logEvent('info', 'completion_streamed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: 200 })
+      scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: 200, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, streamed: true, rpdExempt }), { event: 'write_stream_log' })
+      logEvent('info', 'completion_streamed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: 200, rpdExempt })
       trackRequestMetrics(200, Date.now() - started)
       return
     }
@@ -1130,8 +1140,8 @@ async function proxyCompletion(req, res, kind) {
     const streamResult = await pipeOpenAiStream(upstream, res, model.id, started)
     const outputTokens = tokenEstimateFromResponseText(streamResult.text)
     checkTokenLimit(auth.record.id, outputTokens)
-    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, streamed: true }), { event: 'write_stream_log' })
-    logEvent('info', 'completion_streamed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: upstream.status })
+    scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, streamed: true, rpdExempt }), { event: 'write_stream_log' })
+    logEvent('info', 'completion_streamed', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, streamed: true, status: upstream.status, rpdExempt })
     trackRequestMetrics(upstream.status, Date.now() - started)
     return
   }
@@ -1145,8 +1155,8 @@ async function proxyCompletion(req, res, kind) {
     scheduleBackground(() => writeCachedResponse(cacheKey, cacheTtlSeconds, normalized), { event: 'write_cache' })
   }
 
-  scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens }), { event: 'write_request_log' })
-  logEvent('info', 'completion_finished', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, cacheable: Boolean(cacheKey), streamed: false })
+  scheduleBackground(async () => writeRequestLog(await readStore(), { userId: auth.user.id, email: auth.user.email, username: auth.user.username, keyId: auth.record.id, model: model.id, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, rpdExempt }), { event: 'write_request_log' })
+  logEvent('info', 'completion_finished', { model: model.id, providerModel: upstreamModelId, provider: provider.provider || 'OpenAI Compatible', userId: auth.user.id, keyId: auth.record.id, latencyMs: Date.now() - started, status: upstream.status, inputTokens: sentTokens, outputTokens, totalTokens: sentTokens + outputTokens, cacheable: Boolean(cacheKey), streamed: false, rpdExempt })
   trackRequestMetrics(upstream.status, Date.now() - started)
   res.writeHead(upstream.status, {
     ...corsHeaders(req, { publicApi: res.razeCorsPublic }),

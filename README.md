@@ -20,7 +20,8 @@ RAZE is completely free for everyone. No subscriptions, billing, paid plans, upg
 - Session-gated API key generation with admin-managed verified email access
 - Hashed key storage with fingerprint-only display in admin
 - Per-key RPM/RPD controls plus global defaults for newly generated keys
-- Request logging with input/output/total token estimates and incident codes
+- Admin-controlled unlimited model routes that skip RPD counting without trusting client flags
+- Request logging with input/output/total token estimates, cache hits, RPD exemption markers, and incident codes
 - Context-length validation before provider calls
 - Rate limiting and request size limits
 - Provider secret isolation (keys never stored in model config)
@@ -29,6 +30,12 @@ RAZE is completely free for everyone. No subscriptions, billing, paid plans, upg
 - CORS origin configuration, admin key authentication
 - PostgreSQL and Redis support with local JSON fallback
 - Graceful shutdown for Railway redeployments
+
+## Unlimited models
+
+Admins can mark specific model routes as unlimited from the Admin panel. Unlimited routes skip only the daily RPD counter; RPM, token throughput, context-length validation, provider availability, and API-key authentication still apply.
+
+The backend does not trust client-submitted unlimited flags. For every completion request, it resolves the model route from persisted Admin config first, verifies that the route exists and is online, then checks `rpdExempt` on that trusted route. Exact route IDs take priority, and provider-model aliases only resolve when they match one route, so duplicate aliases cannot be used to force a normal model through an unlimited route.
 
 ## API endpoints
 
@@ -111,6 +118,7 @@ npm start
 - Internal errors return a generic `internal_server_error` with no stack traces
 - Admin routes require the `RAZE_ADMIN_KEY` via `X-Admin-Key` header or `Authorization: Bearer` header
 - All admin-saved models and provider configs are validated and sanitized
+- Unlimited/RPD-exempt routes are decided only after server-side route resolution from persisted Admin config; request body flags, tags, aliases, and duplicate provider-model aliases cannot make a normal model unlimited
 
 ## License
 

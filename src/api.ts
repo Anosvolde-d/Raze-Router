@@ -1,7 +1,7 @@
 import type { Model } from './types'
 
 export type UserKeyConfig = { id: string; key?: string; userId?: string; label: string; active: boolean; createdAt: string; lastUsedAt: string | null; requestCount: number; rpmLimit?: number; rpdLimit?: number }
-export type RequestLogEntry = { id: string; at: string; userId: string; keyId?: string; email: string; username: string; model: string; status: number; inputTokens: number; outputTokens: number; totalTokens: number; incidentCode?: string; streamed?: boolean }
+export type RequestLogEntry = { id: string; at: string; userId: string; keyId?: string; email: string; username: string; model: string; status: number; inputTokens: number; outputTokens: number; totalTokens: number; incidentCode?: string; streamed?: boolean; cacheHit?: boolean; rpdExempt?: boolean }
 
 export type StoreConfig = {
   models: Model[]

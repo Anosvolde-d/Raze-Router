@@ -8,7 +8,10 @@ export const changelog: ChangelogEntry[] = [
     status: 'Live',
     notes: [
       'Per-user API keys now have editable RPM and RPD limits in Admin',
+      'Admin can mark specific model routes as unlimited so those trusted routes do not decrement RPD',
+      'Unlimited model handling is server-enforced after trusted route resolution and cannot be enabled by client request flags',
       'Streaming request logs now estimate and record output tokens instead of leaving token-out at zero',
+      'Request logs use compact cards with cache-hit and unlimited-RPD markers',
       'Verified email allowlist gates Google registration and user API key creation',
       'POST /verified automation endpoint accepts bot-submitted emails with a Railway secret bearer token',
       'Playground now streams assistant output live through the OpenAI-compatible router',

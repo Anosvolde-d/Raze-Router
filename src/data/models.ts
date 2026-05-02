@@ -32,6 +32,7 @@ export const seedModels: Model[] = [
     visibility: 'Public',
     launchAvailable: true,
     sortPriority: 1,
+    rpdExempt: false,
     providerConfig: defaultProvider,
   },
 ]
@@ -53,6 +54,7 @@ export const createBlankModel = (index: number): Model => ({
   visibility: 'Hidden',
   launchAvailable: false,
   sortPriority: index,
+  rpdExempt: false,
   providerConfig: { ...defaultProvider, modelId: '' },
 })
 

@@ -46,6 +46,7 @@ export type Model = {
   visibility: Visibility
   launchAvailable: boolean
   sortPriority: number
+  rpdExempt: boolean
   providerConfig: ProviderConfig
 }
 
