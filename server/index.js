@@ -67,6 +67,15 @@ const metrics = {
   statusCounts: new Map()
 }
 
+const rankingVoteCooldownMs = 12 * 60 * 60 * 1000
+const rankingCategories = [
+  { id: 'coding', label: 'Coding', description: 'Best model for writing, debugging, and reviewing code.' },
+  { id: 'creative-writing', label: 'Creative Writing', description: 'Best model for storytelling, prose, and creative content.' },
+  { id: 'humor-personality', label: 'Humor & Personality', description: 'Most entertaining, witty, and personable model.' },
+  { id: 'most-used', label: 'Most Used Models', description: 'Ranked by total API requests routed through RAZE.', useRequests: true }
+]
+const voteCategoryIds = rankingCategories.filter((category) => !category.useRequests).map((category) => category.id)
+
 const defaultStore = {
   models: [],
   audit: [],
@@ -77,7 +86,12 @@ const defaultStore = {
   userKeys: [],
   requestLogs: [],
   incidents: [],
-  oauthStates: []
+  oauthStates: [],
+  rankingEnabled: false,
+  rankingScores: {},
+  rankingBoosts: {},
+  rankingVoteLocks: {},
+  usageCounters: { users: {}, models: {} }
 }
 
 const mime = {
@@ -182,7 +196,12 @@ async function normalizeStoreSecrets(store) {
     userKeys: normalizeUserKeys(store.userKeys || [], store.keyDefaults || {}),
     requestLogs: store.requestLogs || [],
     incidents: store.incidents || [],
-    oauthStates: store.oauthStates || []
+    oauthStates: store.oauthStates || [],
+    rankingEnabled: store.rankingEnabled === true,
+    rankingScores: normalizeRankingScores(store.rankingScores || {}),
+    rankingBoosts: normalizeRankingScores(store.rankingBoosts || {}),
+    rankingVoteLocks: normalizeRankingVoteLocks(store.rankingVoteLocks || {}),
+    usageCounters: normalizeUsageCounters(store.usageCounters || {})
   }
   if (changed) await writeStore(normalized)
   return normalized
@@ -420,6 +439,177 @@ function publicModel(model) {
   }
 }
 
+function usageDayKey() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function safeCounter(value) {
+  const parsed = Number(value || 0)
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0
+}
+
+function normalizeRankingScores(scores = {}) {
+  const normalized = {}
+  for (const category of voteCategoryIds) {
+    normalized[category] = {}
+    const source = scores?.[category] || {}
+    for (const [modelId, value] of Object.entries(source)) {
+      const safeModelId = sanitizeText(modelId).replace(/[^a-zA-Z0-9._:/-]/g, '').slice(0, 160)
+      if (safeModelId) normalized[category][safeModelId] = safeCounter(value)
+    }
+  }
+  return normalized
+}
+
+function normalizeRankingVoteLocks(locks = {}) {
+  const normalized = {}
+  for (const [userId, categories] of Object.entries(locks || {})) {
+    const safeUserId = sanitizeText(userId).slice(0, 160)
+    if (!safeUserId || !categories || typeof categories !== 'object') continue
+    const userLocks = {}
+    for (const category of voteCategoryIds) {
+      const lock = categories[category]
+      if (!lock || typeof lock !== 'object') continue
+      const nextVoteTime = new Date(lock.nextVoteAt || 0).getTime()
+      if (!Number.isFinite(nextVoteTime)) continue
+      const votedAtTime = new Date(lock.at || Date.now()).getTime()
+      userLocks[category] = {
+        modelId: sanitizeText(lock.modelId).replace(/[^a-zA-Z0-9._:/-]/g, '').slice(0, 160),
+        at: new Date(Number.isFinite(votedAtTime) ? votedAtTime : Date.now()).toISOString(),
+        nextVoteAt: new Date(nextVoteTime).toISOString()
+      }
+    }
+    if (Object.keys(userLocks).length) normalized[safeUserId] = userLocks
+  }
+  return normalized
+}
+
+function normalizeUsageCounters(counters = {}) {
+  const users = {}
+  for (const [userId, value] of Object.entries(counters.users || {})) {
+    const safeUserId = sanitizeText(userId).slice(0, 160)
+    if (!safeUserId) continue
+    users[safeUserId] = {
+      day: sanitizeText(value?.day || usageDayKey()).slice(0, 10),
+      rpdUsed: safeCounter(value?.rpdUsed),
+      dailyTokens: safeCounter(value?.dailyTokens),
+      totalTokens: safeCounter(value?.totalTokens)
+    }
+  }
+  const models = {}
+  for (const [modelId, value] of Object.entries(counters.models || {})) {
+    const safeModelId = sanitizeText(modelId).replace(/[^a-zA-Z0-9._:/-]/g, '').slice(0, 160)
+    if (!safeModelId) continue
+    models[safeModelId] = {
+      requests: safeCounter(value?.requests),
+      totalTokens: safeCounter(value?.totalTokens)
+    }
+  }
+  return { users, models }
+}
+
+function requestLogUsage(store, modelId) {
+  const logs = (store.requestLogs || []).filter((log) => log.model === modelId)
+  return {
+    requests: logs.length,
+    totalTokens: logs.reduce((sum, log) => sum + safeCounter(log.totalTokens), 0)
+  }
+}
+
+function modelUsage(store, modelId) {
+  const counters = normalizeUsageCounters(store.usageCounters || {}).models[modelId] || { requests: 0, totalTokens: 0 }
+  const logs = requestLogUsage(store, modelId)
+  return {
+    requests: Math.max(counters.requests, logs.requests),
+    totalTokens: Math.max(counters.totalTokens, logs.totalTokens)
+  }
+}
+
+function appendRequestStats(store, log) {
+  const day = usageDayKey()
+  const totalTokens = safeCounter(log.totalTokens || safeCounter(log.inputTokens) + safeCounter(log.outputTokens))
+  const usageCounters = normalizeUsageCounters(store.usageCounters || {})
+  const userId = sanitizeText(log.userId).slice(0, 160)
+  const modelId = sanitizeText(log.model).replace(/[^a-zA-Z0-9._:/-]/g, '').slice(0, 160)
+
+  if (userId) {
+    const currentUser = usageCounters.users[userId] || { day, rpdUsed: 0, dailyTokens: 0, totalTokens: 0 }
+    const sameDay = currentUser.day === day
+    usageCounters.users[userId] = {
+      day,
+      rpdUsed: (sameDay ? currentUser.rpdUsed : 0) + (log.rpdExempt ? 0 : 1),
+      dailyTokens: (sameDay ? currentUser.dailyTokens : 0) + totalTokens,
+      totalTokens: safeCounter(currentUser.totalTokens) + totalTokens
+    }
+  }
+
+  if (modelId) {
+    const currentModel = usageCounters.models[modelId] || { requests: 0, totalTokens: 0 }
+    usageCounters.models[modelId] = {
+      requests: safeCounter(currentModel.requests) + 1,
+      totalTokens: safeCounter(currentModel.totalTokens) + totalTokens
+    }
+  }
+
+  return {
+    ...store,
+    usageCounters,
+    requestLogs: [{ id: crypto.randomUUID(), at: new Date().toISOString(), ...log }, ...(store.requestLogs || [])].slice(0, 500)
+  }
+}
+
+function rankingPayload(store, userId) {
+  const scores = normalizeRankingScores(store.rankingScores || {})
+  const boosts = normalizeRankingScores(store.rankingBoosts || {})
+  const locks = normalizeRankingVoteLocks(store.rankingVoteLocks || {})
+  const visibleModels = publicModels(store)
+  const now = Date.now()
+  return {
+    categories: rankingCategories.map((category) => {
+      const models = visibleModels.map((model) => {
+        const usage = modelUsage(store, model.id)
+        const points = safeCounter(scores[category.id]?.[model.id]) + safeCounter(boosts[category.id]?.[model.id])
+        return {
+          id: model.id,
+          name: model.name,
+          company: model.providerConfig?.provider || 'RAZE',
+          status: model.status,
+          tags: model.tags || [],
+          points,
+          requests: usage.requests,
+          totalTokens: usage.totalTokens
+        }
+      }).sort((a, b) => category.useRequests ? b.requests - a.requests || a.name.localeCompare(b.name) : b.points - a.points || a.name.localeCompare(b.name))
+      const userLock = userId && locks[userId]?.[category.id] ? locks[userId][category.id] : undefined
+      return {
+        ...category,
+        models,
+        userVote: userLock ? { ...userLock, locked: new Date(userLock.nextVoteAt).getTime() > now } : undefined
+      }
+    }),
+    voteCooldownHours: rankingVoteCooldownMs / 60 / 60 / 1000,
+    generatedAt: new Date().toISOString()
+  }
+}
+
+function dashboardStats(store, userId) {
+  const keys = (store.userKeys || []).filter((key) => key.userId === userId)
+  const activeKey = keys.find((key) => key.active !== false) || keys[0]
+  const keyDefaults = normalizeKeyDefaults(store.keyDefaults || {})
+  const counters = normalizeUsageCounters(store.usageCounters || {})
+  const userUsage = counters.users[userId]
+  const today = userUsage?.day === usageDayKey() ? userUsage : { rpdUsed: 0, dailyTokens: 0, totalTokens: safeCounter(userUsage?.totalTokens) }
+  return {
+    rpdUsed: safeCounter(today.rpdUsed),
+    rpdLimit: normalizeLimit(activeKey?.rpdLimit, keyDefaults.rpdLimit),
+    rpmLimit: normalizeLimit(activeKey?.rpmLimit, keyDefaults.rpmLimit),
+    dailyTokens: safeCounter(today.dailyTokens),
+    totalTokens: safeCounter(today.totalTokens),
+    requestCount: safeCounter(activeKey?.requestCount),
+    activeKeyId: activeKey?.id || null
+  }
+}
+
 function adminStore(store) {
   return {
     ...redactStore(store),
@@ -429,7 +619,11 @@ function adminStore(store) {
     sessions: undefined,
     users: store.users || [],
     requestLogs: store.requestLogs || [],
-    incidents: store.incidents || []
+    incidents: store.incidents || [],
+    rankingEnabled: store.rankingEnabled === true,
+    rankingScores: normalizeRankingScores(store.rankingScores || {}),
+    rankingBoosts: normalizeRankingScores(store.rankingBoosts || {}),
+    usageCounters: normalizeUsageCounters(store.usageCounters || {})
   }
 }
 
@@ -690,13 +884,14 @@ function persistableUserKey(key) {
 }
 
 async function touchUserKey(store, keyHash) {
-  const next = { ...store, userKeys: (store.userKeys || []).map((item) => safeCompare(item.keyHash || hashApiKey(item.key || ''), keyHash) ? { ...item, key: undefined, keyHash: item.keyHash || hashApiKey(item.key || ''), fingerprint: item.fingerprint || (item.key ? keyFingerprint(item.key) : undefined), lastUsedAt: new Date().toISOString(), requestCount: (item.requestCount || 0) + 1 } : item) }
+  const latest = await readStore().catch(() => store)
+  const next = { ...latest, userKeys: (latest.userKeys || []).map((item) => safeCompare(item.keyHash || hashApiKey(item.key || ''), keyHash) ? { ...item, key: undefined, keyHash: item.keyHash || hashApiKey(item.key || ''), fingerprint: item.fingerprint || (item.key ? keyFingerprint(item.key) : undefined), lastUsedAt: new Date().toISOString(), requestCount: (item.requestCount || 0) + 1 } : item) }
   await writeStore(next)
 }
 
 async function writeRequestLog(store, log) {
-  const next = { ...store, requestLogs: [{ id: crypto.randomUUID(), at: new Date().toISOString(), ...log }, ...(store.requestLogs || [])].slice(0, 500) }
-  await writeStore(next)
+  const latest = await readStore().catch(() => store)
+  await writeStore(appendRequestStats(latest, log))
 }
 
 function tokenEstimateFromResponseText(text = '') {
@@ -712,9 +907,8 @@ function createIncident(store, details) {
 async function writeIncidentAndRequestLog(incident, log) {
   const store = await readStore()
   await writeStore({
-    ...store,
-    incidents: [incident, ...(store.incidents || [])].slice(0, 200),
-    requestLogs: [{ id: crypto.randomUUID(), at: new Date().toISOString(), ...log, incidentCode: incident.code }, ...(store.requestLogs || [])].slice(0, 500)
+    ...appendRequestStats(store, { ...log, incidentCode: incident.code }),
+    incidents: [incident, ...(store.incidents || [])].slice(0, 200)
   })
 }
 
@@ -792,12 +986,18 @@ function sanitizeStoreInput(store) {
   return {
     ...store,
     models: Array.isArray(store.models) ? store.models.map(sanitizeModel).filter((model) => model.id) : [],
+    rankingEnabled: store.rankingEnabled === true,
     verifiedEmails: normalizeVerifiedEmails(store.verifiedEmails || []),
     keyDefaults,
     userKeys: normalizeUserKeys(store.userKeys || [], keyDefaults),
+    requestLogs: Array.isArray(store.requestLogs) ? store.requestLogs.slice(0, 500) : [],
     incidents: Array.isArray(store.incidents) ? store.incidents.slice(0, 200) : [],
     audit: Array.isArray(store.audit) ? store.audit.slice(0, 500) : [],
-    oauthStates: Array.isArray(store.oauthStates) ? store.oauthStates.slice(0, 200) : []
+    oauthStates: Array.isArray(store.oauthStates) ? store.oauthStates.slice(0, 200) : [],
+    rankingScores: normalizeRankingScores(store.rankingScores || {}),
+    rankingBoosts: normalizeRankingScores(store.rankingBoosts || {}),
+    rankingVoteLocks: normalizeRankingVoteLocks(store.rankingVoteLocks || {}),
+    usageCounters: normalizeUsageCounters(store.usageCounters || {})
   }
 }
 
@@ -1168,12 +1368,78 @@ async function proxyCompletion(req, res, kind) {
   res.end(JSON.stringify(normalized))
 }
 
+async function handleRankingVote(req, res) {
+  const rate = checkRateLimit(`ranking:${clientIp(req)}`, 30)
+  if (!rate.ok) return sendJson(res, 429, { error: { message: 'Too many ranking requests. Try again shortly.', type: 'rate_limited' } })
+
+  const store = await readStore()
+  if (store.rankingEnabled !== true) return sendJson(res, 404, { error: { message: 'Model Ranking is disabled by admin.', type: 'ranking_disabled' } })
+  const session = authenticateSession(req, store)
+  if (!session || session.user.authMethod !== 'google' || !session.user.emailVerified) return sendJson(res, 401, { error: { message: 'Sign in with a verified Google account before voting.', type: 'google_session_required' } })
+  if (!isEmailVerifiedByAdmin(store, session.user.email)) return sendJson(res, 403, { error: { message: 'Your email is not verified for RAZE access. Please contact an admin.', type: 'email_not_verified_by_admin' } })
+
+  const body = await readBody(req)
+  const categoryId = sanitizeText(body.categoryId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)
+  const modelId = sanitizeText(body.modelId).replace(/[^a-zA-Z0-9._:/-]/g, '').slice(0, 160)
+  if (!voteCategoryIds.includes(categoryId)) return sendJson(res, 400, { error: { message: 'This ranking category does not accept votes.', type: 'invalid_ranking_category' } })
+  const model = publicModels(store).find((item) => item.id === modelId)
+  if (!model) return sendJson(res, 404, { error: { message: 'Model not found in the public registry.', type: 'model_not_found' } })
+
+  const now = Date.now()
+  const locks = normalizeRankingVoteLocks(store.rankingVoteLocks || {})
+  const existingLock = locks[session.user.id]?.[categoryId]
+  const nextVoteAt = existingLock ? new Date(existingLock.nextVoteAt).getTime() : 0
+  if (nextVoteAt > now) {
+    return sendJson(res, 429, { error: { message: 'You already voted in this category. Try again after the cooldown.', type: 'ranking_vote_cooldown', nextVoteAt: new Date(nextVoteAt).toISOString() } })
+  }
+
+  const scores = normalizeRankingScores(store.rankingScores || {})
+  scores[categoryId] = { ...(scores[categoryId] || {}), [modelId]: safeCounter(scores[categoryId]?.[modelId]) + 1 }
+  locks[session.user.id] = {
+    ...(locks[session.user.id] || {}),
+    [categoryId]: {
+      modelId,
+      at: new Date(now).toISOString(),
+      nextVoteAt: new Date(now + rankingVoteCooldownMs).toISOString()
+    }
+  }
+
+  const saved = sanitizeStoreInput({
+    ...store,
+    rankingScores: scores,
+    rankingVoteLocks: locks,
+    audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'ranking_vote', userId: session.user.id, categoryId, modelId }]
+  })
+  await writeStore(saved)
+  return sendJson(res, 200, rankingPayload(saved, session.user.id))
+}
+
+async function handleDashboardStats(req, res) {
+  const store = await readStore()
+  const session = authenticateSession(req, store)
+  if (!session) return sendJson(res, 401, { error: { message: 'Session required.', type: 'session_required' } })
+  return sendJson(res, 200, dashboardStats(store, session.user.id))
+}
+
 async function handleAdmin(req, res, pathname) {
   if (!isAdmin(req)) return sendJson(res, 401, { error: 'admin_key_required' })
   const store = await readStore()
 
   if (req.method === 'GET' && pathname === '/api/admin/verify') return sendJson(res, 200, { ok: true })
   if (req.method === 'GET' && pathname === '/api/admin/config') return sendJson(res, 200, adminStore(store))
+  if (req.method === 'POST' && pathname === '/api/admin/rankings/boost') {
+    const body = await readBody(req)
+    const categoryId = sanitizeText(body.categoryId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)
+    const modelId = sanitizeText(body.modelId).replace(/[^a-zA-Z0-9._:/-]/g, '').slice(0, 160)
+    const amount = Math.max(1, Math.min(10000, Math.floor(Number(body.amount || 1))))
+    if (!voteCategoryIds.includes(categoryId)) return sendJson(res, 400, { error: 'invalid_ranking_category' })
+    if (!publicModels(store).some((model) => model.id === modelId)) return sendJson(res, 404, { error: 'model_not_found' })
+    const boosts = normalizeRankingScores(store.rankingBoosts || {})
+    boosts[categoryId] = { ...(boosts[categoryId] || {}), [modelId]: safeCounter(boosts[categoryId]?.[modelId]) + amount }
+    const saved = sanitizeStoreInput({ ...store, rankingBoosts: boosts, audit: [...(store.audit || []), { at: new Date().toISOString(), action: 'ranking_boost', categoryId, modelId, amount }] })
+    await writeStore(saved)
+    return sendJson(res, 200, adminStore(saved))
+  }
   if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/admin/config') {
     const next = await readBody(req)
     // When the admin frontend saves config it sends back the redacted store where sensitive
@@ -1393,7 +1659,18 @@ const server = createServer(async (req, res) => {
     if (pathname === '/api/auth/google' && req.method === 'GET') return startGoogleAuth(req, res)
     if (pathname === '/auth' && req.method === 'GET') return completeGoogleAuth(req, res, url)
     if (pathname === '/verified' && req.method === 'POST') return handleVerifiedAutomation(req, res)
-    if (pathname === '/api/config' && req.method === 'GET') return sendJson(res, 200, { models: publicModels(await readStore()) })
+    if (pathname === '/api/config' && req.method === 'GET') {
+      const store = await readStore()
+      return sendJson(res, 200, { models: publicModels(store), rankingEnabled: store.rankingEnabled === true })
+    }
+    if (pathname === '/api/rankings' && req.method === 'GET') {
+      const store = await readStore()
+      if (store.rankingEnabled !== true) return sendJson(res, 404, { error: { message: 'Model Ranking is disabled by admin.', type: 'ranking_disabled' } })
+      const session = authenticateSession(req, store)
+      return sendJson(res, 200, rankingPayload(store, session?.user?.id))
+    }
+    if (pathname === '/api/rankings/vote' && req.method === 'POST') return handleRankingVote(req, res)
+    if (pathname === '/api/dashboard/stats' && req.method === 'GET') return handleDashboardStats(req, res)
     if (isOpenAiBasePath(pathname) && req.method === 'GET') return sendJson(res, 200, { ok: true, service: 'raze', object: 'api', endpoints: { models: '/v1/models', chat_completions: '/v1/chat/completions' } }, { 'cache-control': 'no-store' })
     if (isOpenAiBasePath(pathname) && req.method === 'POST') return proxyCompletion(req, res, 'chat')
     if (pathname === '/v1/models' && req.method === 'GET') return sendJson(res, 200, openAiModelList(await readStore()))

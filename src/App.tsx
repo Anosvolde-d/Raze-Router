@@ -3,20 +3,12 @@ import ReactMarkdown from 'react-markdown'
 import type { CacheMode, Capability, Model, ModelStatus, ProviderType, Visibility } from './types'
 import { capabilityDescriptions, createBlankModel, seedModels } from './data/models'
 import { changelog } from './data/changelog'
-import { clearUserApiKey, clearUserSession, createUserApiKey, deleteAdminUser, deleteAdminUserKey, deleteAllAdminUserKeys, deleteAllAdminUsers, fetchAdminConfig, fetchAdminIncident, fetchPublicConfig, fetchUserSession, getStoredAdminKey, getUserApiKey, saveAdminConfig, saveProviderSecret, sendChatCompletionStream, setStoredAdminKey, startGoogleAuth, storeUserApiKey, uploadAvatar, verifyAdminKey, type RequestLogEntry, type UserKeyConfig, type UserProfile } from './api'
+import { adminBoostRanking, clearUserApiKey, clearUserSession, createUserApiKey, deleteAdminUser, deleteAdminUserKey, deleteAllAdminUserKeys, deleteAllAdminUsers, fetchAdminConfig, fetchAdminIncident, fetchDashboardStats, fetchPublicConfig, fetchRankings, fetchUserSession, getStoredAdminKey, getUserApiKey, saveAdminConfig, saveProviderSecret, sendChatCompletionStream, setStoredAdminKey, startGoogleAuth, storeUserApiKey, uploadAvatar, verifyAdminKey, voteRanking, type DashboardStats, type RankingCategory, type RankingPayload, type RequestLogEntry, type StoreConfig, type UserKeyConfig, type UserProfile } from './api'
 
-const views = ['Landing', 'Models', 'Playground', 'Dashboard', 'Changelog'] as const
+const views = ['Landing', 'Models', 'Ranking', 'Playground', 'Dashboard', 'Changelog'] as const
 type View = (typeof views)[number] | 'Admin'
 
-type AdminConfig = {
-  models?: Model[]
-  users?: UserProfile[]
-  verifiedEmails?: string[]
-  keyDefaults?: { rpmLimit?: number; rpdLimit?: number }
-  userKeys?: UserKeyConfig[]
-  requestLogs?: RequestLogEntry[]
-  incidents?: Array<{ code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string | null; userKeyId?: string }>
-}
+type AdminConfig = Partial<StoreConfig>
 
 type IncidentDetail = { code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string | null; userKeyId?: string }
 type PlaygroundContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } } | { type: 'file'; file: { name: string; mimeType: string; dataUrl: string } }
@@ -25,11 +17,16 @@ type PlaygroundAttachment = { id: string; name: string; type: string; dataUrl: s
 type RenderSegment = { type: 'thinking' | 'markdown'; content: string; closed?: boolean }
 type ConfirmState = { open: boolean; title: string; body: string; confirmLabel?: string; tone?: 'default' | 'danger'; onConfirm: () => void }
 
-type AdminSection = 'Routes' | 'Aliases' | 'Accounts' | 'Verification' | 'Unlimited' | 'Request Logs'
+type AdminSection = 'Routes' | 'Aliases' | 'Accounts' | 'Verification' | 'Unlimited' | 'Ranking' | 'Request Logs'
 
 const filters = ['All', 'Online', 'Vision', 'Multimodal', 'Fast', 'Long Context', 'Experimental', 'New', 'Staff Picks']
 const sortOptions = ['Priority', 'Fastest', 'Longest Context', 'Recently Added', 'Alphabetical']
-const adminSections: AdminSection[] = ['Routes', 'Aliases', 'Accounts', 'Verification', 'Unlimited', 'Request Logs']
+const adminSections: AdminSection[] = ['Routes', 'Aliases', 'Accounts', 'Verification', 'Unlimited', 'Ranking', 'Request Logs']
+const rankingVoteCategories = [
+  { id: 'coding', label: 'Coding' },
+  { id: 'creative-writing', label: 'Creative Writing' },
+  { id: 'humor-personality', label: 'Humor & Personality' },
+]
 const capabilities: Capability[] = ['Vision', 'Audio', 'Video', 'Files', 'Tools', 'Reasoning', 'Streaming', 'Multimodal']
 const providerTypes: ProviderType[] = ['OpenAI Compatible', 'Anthropic', 'Custom']
 const cacheModes: CacheMode[] = ['Off', 'Anthropic Prompt Cache', 'OpenAI Compatible Cache', 'Hybrid']
@@ -74,6 +71,29 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat('en-US').format(value)
 }
 
+function formatCompactNumber(value?: number | null) {
+  const normalized = Number(value || 0)
+  if (!Number.isFinite(normalized)) return '0'
+  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: normalized >= 1000 ? 1 : 0 }).format(normalized)
+}
+
+function formatRankingCooldown(value?: string) {
+  if (!value) return ''
+  const remainingMs = new Date(value).getTime() - Date.now()
+  if (!Number.isNaN(remainingMs) && remainingMs > 0) {
+    const hours = Math.floor(remainingMs / 3_600_000)
+    const minutes = Math.max(1, Math.ceil((remainingMs % 3_600_000) / 60_000))
+    return hours ? hours + 'h ' + minutes + 'm' : minutes + 'm'
+  }
+  return 'ready'
+}
+
+function rankTone(rank: number) {
+  if (rank === 1) return 'gold'
+  if (rank === 2) return 'silver'
+  if (rank === 3) return 'bronze'
+  return 'neutral'
+}
 function formatDate(value?: string | null) {
   if (!value) return '-'
   const date = new Date(value)
@@ -194,6 +214,7 @@ function App() {
   const [adminGateOpen, setAdminGateOpen] = useState(false)
   const [syncState, setSyncState] = useState('checking backend...')
   const [models, setModels] = useState<Model[]>(seedModels)
+  const [rankingEnabled, setRankingEnabled] = useState(false)
   const [focusedCard, setFocusedCard] = useState<string | null>(null)
   const [userApiKey, setUserApiKey] = useState('')
   const [user, setUser] = useState<UserProfile | null>(null)
@@ -231,6 +252,7 @@ function App() {
   useEffect(() => {
     fetchPublicConfig().then((config) => {
       if (config.models?.length) setModels(config.models)
+      setRankingEnabled(config.rankingEnabled === true)
       setSyncState('backend connected')
     }).catch((error) => setSyncState(`local fallback: ${error.message}`))
   }, [])
@@ -247,6 +269,10 @@ function App() {
       window.history.replaceState({}, document.title, `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`)
     }
   }, [])
+
+  useEffect(() => {
+    if (!rankingEnabled && view === 'Ranking') setView('Models')
+  }, [rankingEnabled, view])
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -301,6 +327,7 @@ function App() {
       const saved = await saveAdminConfig(adminKey, { ...adminConfig, models })
       setModels(saved.models)
       setAdminConfig(saved)
+      setRankingEnabled(saved.rankingEnabled === true)
       setSyncState('config saved')
     } catch (error) {
       setSyncState(error instanceof Error ? error.message : 'save failed')
@@ -311,7 +338,8 @@ function App() {
     if (!adminKey) return
     const config = await fetchAdminConfig(adminKey)
     setModels(config.models)
-    setAdminConfig({ models: config.models, users: config.users, verifiedEmails: config.verifiedEmails, keyDefaults: config.keyDefaults, userKeys: config.userKeys, requestLogs: config.requestLogs, incidents: config.incidents })
+    setAdminConfig(config)
+    setRankingEnabled(config.rankingEnabled === true)
   }
 
   const updateAdminConfig = useCallback((updater: (config: AdminConfig) => AdminConfig) => {
@@ -357,7 +385,8 @@ function App() {
       setView('Admin')
       fetchAdminConfig(password).then((config) => {
         if (config.models?.length) setModels(config.models)
-        setAdminConfig({ models: config.models, users: config.users, verifiedEmails: config.verifiedEmails, keyDefaults: config.keyDefaults, userKeys: config.userKeys, requestLogs: config.requestLogs, incidents: config.incidents })
+        setAdminConfig(config)
+        setRankingEnabled(config.rankingEnabled === true)
         setSyncState('admin backend connected')
       }).catch((error) => setSyncState(error instanceof Error ? error.message : 'admin sync failed'))
     } catch (error) {
@@ -373,13 +402,14 @@ function App() {
   }
 
   const authMode = user?.authMethod === 'google' && user.emailVerified ? 'GOOGLE VERIFIED' : 'SIGN-IN REQUIRED'
+  const visibleViews = useMemo<View[]>(() => rankingEnabled ? [...views] : views.filter((item) => item !== 'Ranking'), [rankingEnabled])
 
   return (
     <>
       <nav className="top-nav">
         <button className="wordmark ghost-button" onClick={() => setView('Landing')}>RAZE</button>
         <div className="nav-links">
-          {views.map((item) => <button key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>{item}</button>)}
+          {visibleViews.map((item) => <button key={item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>{item}</button>)}
         </div>
         <div className="top-nav-actions">
           <button className="profile-chip" onClick={() => setView('Dashboard')}>{user?.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span>{user?.username?.slice(0, 1) || '?'}</span>}</button>
@@ -390,8 +420,9 @@ function App() {
       <main className="app-frame">
         {view === 'Landing' && <Landing setView={setView} openLogin={() => setLoginOpen(true)} models={featuredModels.length ? featuredModels : visibleModels.slice(0, 3)} focusedCard={focusedCard} setFocusedCard={setFocusedCard} copyId={copyId} copied={copied} stats={{ modelCount: visibleModels.length, authMode, adminUnlocked, cacheModes: cacheModes.length, providerCount: providerTypes.length, access: 'COMMUNITY' }} />}
         {view === 'Models' && <ModelsView filter={filter} setFilter={setFilter} sort={sort} setSort={setSort} visibleModels={visibleModels} copyId={copyId} copied={copied} />}
+        {view === 'Ranking' && rankingEnabled && <ModelRanking user={user} openLogin={() => setLoginOpen(true)} />}
         {view === 'Playground' && <Playground models={visibleModels} userApiKey={userApiKey} error={playgroundError} setError={setPlaygroundError} />}
-        {view === 'Dashboard' && <Dashboard setView={setView} openLogin={() => setLoginOpen(true)} userApiKey={userApiKey} setUserApiKey={setUserApiKey} user={user} setUser={setUser} logout={logout} openConfirm={openConfirm} />}
+        {view === 'Dashboard' && <Dashboard setView={setView} openLogin={() => setLoginOpen(true)} userApiKey={userApiKey} setUserApiKey={setUserApiKey} user={user} setUser={setUser} logout={logout} openConfirm={openConfirm} rankingEnabled={rankingEnabled} />}
         {view === 'Admin' && adminUnlocked && selectedModel && <AdminPanel models={models} adminConfig={adminConfig} updateAdminConfig={updateAdminConfig} selectedModel={selectedModel} selectedModelId={selectedModelId} setSelectedModelId={setSelectedModelId} adminSection={adminSection} setAdminSection={setAdminSection} updateModel={updateModel} addModel={addModel} deleteModel={deleteModel} saveConfig={saveConfig} saveSecret={saveSecret} syncState={syncState} toggleCapability={(cap) => toggleCapability(selectedModel, updateModel, cap)} refreshAdmin={refreshAdmin} adminKey={adminKey} openConfirm={openConfirm} />}
         {view === 'Admin' && adminUnlocked && !selectedModel && <div style={{ padding: '60px 5vw' }}><p style={{ fontFamily: 'ui-monospace, monospace', fontSize: '.9rem' }}>Loading routes from backend...</p></div>}
         {view === 'Admin' && !adminUnlocked && <LockedAdmin openGate={() => setAdminGateOpen(true)} />}
@@ -423,6 +454,66 @@ function ModelsView({ filter, setFilter, sort, setSort, visibleModels, copyId, c
   return <section className="view-shell registry-section"><div className="section-heading split-heading"><div><p className="eyebrow">registry</p><h2>Model Registry</h2><p>Only configured, visible routes appear here. Add production routes from the protected admin panel.</p></div><div className="registry-readout">visible / {visibleModels.length}</div></div><div className="toolbar"><div className="chip-row">{filters.map((item) => <button key={item} onClick={() => setFilter(item)} className={filter === item ? 'chip active' : 'chip'}>{item}</button>)}</div><select value={sort} onChange={(event) => setSort(event.target.value)}>{sortOptions.map((item) => <option key={item}>{item}</option>)}</select></div><div className="model-grid">{visibleModels.length ? visibleModels.map((model) => <ModelCard key={model.id} model={model} onCopy={copyId} copied={copied === model.id} />) : <EmptyState title="No visible routes" body="No visible routes are published yet." />}</div></section>
 }
 
+function ModelRanking({ user, openLogin }: { user: UserProfile | null; openLogin: () => void }) {
+  const [payload, setPayload] = useState<RankingPayload | null>(null)
+  const [activeCategoryId, setActiveCategoryId] = useState('')
+  const [rankingState, setRankingState] = useState('loading model ranking...')
+  const [votingModelId, setVotingModelId] = useState('')
+
+  const loadRankings = useCallback(async () => {
+    try {
+      const rankings = await fetchRankings()
+      setPayload(rankings)
+      setActiveCategoryId((current) => current || rankings.categories[0]?.id || '')
+      setRankingState('live ranking synced')
+    } catch (error) {
+      setRankingState(error instanceof Error ? error.message : 'ranking unavailable')
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadRankings()
+  }, [loadRankings, user?.id])
+
+  const activeCategory = payload?.categories.find((category) => category.id === activeCategoryId) || payload?.categories[0]
+  const sortedModels = useMemo(() => {
+    if (!activeCategory) return []
+    return [...activeCategory.models].sort((a, b) => {
+      const left = activeCategory.useRequests ? b.requests - a.requests : b.points - a.points
+      return left || a.name.localeCompare(b.name)
+    })
+  }, [activeCategory])
+  const maxValue = Math.max(1, ...sortedModels.map((model) => activeCategory?.useRequests ? model.requests : model.points))
+  const userVote = activeCategory?.userVote
+  const locked = Boolean(userVote?.locked && userVote.nextVoteAt && new Date(userVote.nextVoteAt).getTime() > Date.now())
+
+  const castVote = async (category: RankingCategory, modelId: string) => {
+    if (!user) {
+      openLogin()
+      return
+    }
+    if (category.useRequests || locked) return
+    setVotingModelId(modelId)
+    try {
+      const next = await voteRanking(category.id, modelId)
+      setPayload(next)
+      setRankingState('vote saved - next vote unlocks in 12h')
+    } catch (error) {
+      setRankingState(error instanceof Error ? error.message : 'vote failed')
+    } finally {
+      setVotingModelId('')
+    }
+  }
+
+  return <section className="view-shell ranking-section"><div className="ranking-shell"><header className="ranking-hero"><div><p className="eyebrow">model.ranking</p><h2>Model Ranking</h2><p>Community tier lists for every public route. Coding, writing, and personality use votes; Most Used Models is linked to real routed request counts.</p></div><div className="ranking-live-card"><span>cooldown</span><b>{payload ? payload.voteCooldownHours + 'h' : '12h'}</b><small>{rankingState}</small></div></header><nav className="ranking-tabs" aria-label="Model ranking categories">{payload?.categories.length ? payload.categories.map((category) => <button key={category.id} type="button" className={activeCategory?.id === category.id ? 'active' : ''} onClick={() => setActiveCategoryId(category.id)}><span>{category.label}</span><small>{category.useRequests ? 'requests' : 'votes'}</small></button>) : rankingVoteCategories.map((category) => <button key={category.id} type="button" disabled><span>{category.label}</span><small>loading</small></button>)}</nav>{activeCategory ? <div className="ranking-board"><div className="ranking-board-head"><div><p className="eyebrow">{activeCategory.useRequests ? 'request leaderboard' : 'community vote'}</p><h3>{activeCategory.label}</h3><p>{activeCategory.description}</p></div>{activeCategory.useRequests ? <span>ranked by req</span> : <span>{locked ? 'next vote ' + formatRankingCooldown(userVote?.nextVoteAt) : 'vote ready'}</span>}</div><div className="ranking-card-list">{sortedModels.length ? sortedModels.map((model, index) => {
+    const rank = index + 1
+    const value = activeCategory.useRequests ? model.requests : model.points
+    const width = Math.max(value > 0 ? 7 : 0, Math.round((value / maxValue) * 100))
+    const votedForThis = userVote?.modelId === model.id
+    const voteLabel = !user ? 'Sign in' : locked ? (votedForThis ? 'Voted' : 'Cooldown') : votedForThis ? 'Vote again' : 'Vote'
+    return <article className="ranking-card" key={activeCategory.id + '-' + model.id}><div className={'ranking-rank ' + rankTone(rank)}>#{rank}</div><div className="ranking-model-main"><div className="ranking-model-title"><div><h4>{model.name}</h4><p>{model.company} / <code>{model.id}</code></p></div><span>{model.status}</span></div><div className="ranking-progress"><span style={{ width: width + '%' }} /></div><div className="ranking-model-tags">{model.tags.slice(0, 4).map((tag) => <em key={tag}>{tag}</em>)}</div></div><div className="ranking-score"><b>{formatCompactNumber(value)}</b><span>{activeCategory.useRequests ? 'req' : 'pts'}</span><small>{formatCompactNumber(model.totalTokens)} tokens</small>{!activeCategory.useRequests && <button type="button" className={votedForThis && locked ? 'primary' : 'secondary'} disabled={Boolean(votingModelId) || locked} onClick={() => castVote(activeCategory, model.id)}>{votingModelId === model.id ? 'Saving...' : voteLabel}</button>}</div></article>
+  }) : <EmptyState title="No ranking models" body="Publish public models in Admin to fill this leaderboard." />}</div></div> : <EmptyState title="Ranking unavailable" body="The ranking endpoint did not return any categories yet." />}</div></section>
+}
 function VideoBackground({ url, title }: { url?: string; title: string }) {
   const [failed, setFailed] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -635,10 +726,32 @@ function Playground({ models, userApiKey, error, setError }: { models: Model[]; 
   return <section className="playground-shell"><header className="playground-topbar"><div className="playground-topbar-left"><span className="playground-badge">Chat</span><div className="playground-title-group"><div className="playground-title-main">RAZE Conversation</div><div className="playground-title-sub">{model?.name || 'No route selected'}</div></div></div><div className="playground-topbar-right"><span className={`playground-status ${model?.status === 'Online' ? 'online' : ''}`}>{model?.status || 'No model'}</span><button className="playground-ghost" onClick={() => setDebugOpen((value) => !value)}>{debugOpen ? 'Hide Debug' : 'Safe Debug'}</button></div></header><div className="playground-workspace"><main className="playground-chat-panel"><div className="playground-config playground-config-framed"><div className="playground-field-row"><label className="playground-field-label">Route</label><select value={modelId} onChange={(event) => setModelId(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="playground-field-row"><label className="playground-field-label">System</label><textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} placeholder="System prompt" /></div>{error ? <div className="playground-alert">{error}</div> : null}</div><div ref={streamRef} className="playground-chat-stream">{messages.length ? messages.map((message, index) => <article key={index} className={`playground-message ${message.role}`}><span>{message.role}</span><MessageContent content={message.content} attachments={message.attachments} /></article>) : <div className="playground-empty"><div className="playground-empty-icon" aria-hidden="true">&#9670;</div><span>No messages yet.</span><small>Pick a route, attach images or files, and send a prompt through the protected router.</small></div>}</div><div className="playground-composer"><div className="playground-composer-box"><textarea ref={composerRef} value={prompt} onInput={(event) => resizeComposer(event.currentTarget)} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !pending) { event.preventDefault(); submit() } }} placeholder="Send a message through the selected route..." /><div className="playground-composer-actions"><label className="playground-icon-btn" title="Attach files">+<input type="file" multiple onChange={(event) => attachFiles(event.target.files)} /></label><button className="playground-icon-btn send" onClick={submit} disabled={pending}>{pending ? '...' : 'Send'}</button></div></div>{attachments.length ? <div className="playground-attachments">{attachments.map((file) => <div className="playground-attachment" key={file.id}><div className="playground-attachment-preview">{file.kind === 'image' ? <img src={file.dataUrl} alt={file.name} /> : <span className="playground-attachment-file-icon">&#9733;</span>}</div><div className="playground-attachment-meta"><b>{file.name}</b><small>{file.kind === 'image' ? 'image preview' : file.type}</small></div><button type="button" onClick={() => removeAttachment(file.id)}>x</button></div>)}</div> : null}<div className="playground-composer-hint"><span>{userApiKey ? 'Bearer key loaded from dashboard' : 'No bearer key loaded'}</span><span>{pending ? 'Sending...' : 'Enter to send  -  Shift+Enter for newline'}</span></div></div></main><aside className={`playground-debug-panel ${debugOpen ? '' : 'hidden'}`}><div className="playground-debug-header"><span>Safe Debug</span><span>{model?.id || 'no-model'}</span></div><div className="playground-debug-body"><div><div className="playground-debug-title">Request preview</div><pre className="playground-code-block">{JSON.stringify(requestPreview, null, 2)}</pre></div><div><div className="playground-debug-title">Response</div><pre className="playground-code-block response">{result}</pre></div></div></aside></div></section>
 }
 
-function Dashboard({ setView, openLogin, userApiKey, setUserApiKey, user, setUser, logout, openConfirm }: { setView: (view: View) => void; openLogin: () => void; userApiKey: string; setUserApiKey: (value: string) => void; user: UserProfile | null; setUser: (user: UserProfile) => void; logout: () => void; openConfirm: (title: string, body: string, onConfirm: () => void, confirmLabel?: string, tone?: 'default' | 'danger') => void }) {
+function Dashboard({ setView, openLogin, userApiKey, setUserApiKey, user, setUser, logout, openConfirm, rankingEnabled }: { setView: (view: View) => void; openLogin: () => void; userApiKey: string; setUserApiKey: (value: string) => void; user: UserProfile | null; setUser: (user: UserProfile) => void; logout: () => void; openConfirm: (title: string, body: string, onConfirm: () => void, confirmLabel?: string, tone?: 'default' | 'danger') => void; rankingEnabled: boolean }) {
   const [keyState, setKeyState] = useState('')
   const [avatarState, setAvatarState] = useState('')
   const [keyVisible, setKeyVisible] = useState(false)
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null)
+  const [statsState, setStatsState] = useState('Sign in to sync live usage.')
+
+  useEffect(() => {
+    if (!user) {
+      setDashboardStats(null)
+      setStatsState('Sign in to sync live usage.')
+      return
+    }
+    let cancelled = false
+    setStatsState('syncing live usage...')
+    fetchDashboardStats().then((stats) => {
+      if (cancelled) return
+      setDashboardStats(stats)
+      setStatsState('usage synced')
+    }).catch((error) => {
+      if (cancelled) return
+      setDashboardStats(null)
+      setStatsState(error instanceof Error ? error.message : 'usage sync failed')
+    })
+    return () => { cancelled = true }
+  }, [user?.id])
 
   const onAvatarFile = async (file: File) => {
     if (!user) return setAvatarState('Sign in with Google before uploading an avatar.')
@@ -670,6 +783,12 @@ function Dashboard({ setView, openLogin, userApiKey, setUserApiKey, user, setUse
       setUserApiKey(key.key)
       setKeyVisible(true)
       setKeyState(hasExisting ? 'previous key deleted, new key generated' : 'key generated')
+      try {
+        setDashboardStats(await fetchDashboardStats())
+        setStatsState('usage synced')
+      } catch {
+        setStatsState('key generated; usage sync pending')
+      }
     } catch (error) {
       setKeyState(error instanceof Error ? error.message : 'key generation failed')
     }
@@ -691,9 +810,14 @@ function Dashboard({ setView, openLogin, userApiKey, setUserApiKey, user, setUse
     setKeyState('key copied')
   }
 
-  return <section className="view-shell dashboard-section"><div className="section-heading"><p className="eyebrow">dashboard</p><h2>Command center.</h2><p>Verified Google sessions can manage avatars and one protected RAZE API key.</p></div><div className="dashboard-grid"><article className="wide-panel dashboard-account-panel"><p className="eyebrow">account</p><h3>{user ? user.username : 'Sign in required'}</h3><p>{user ? `${user.email}  -  ${user.emailVerified ? 'verified Google account' : 'verification required'}` : 'Sign in with Google to unlock avatar storage and API key creation.'}</p><div className="dashboard-actions">{user ? <><button className="primary" onClick={logout}>Sign out</button><button className="secondary" onClick={() => setView('Playground')}>Open Playground</button></> : <><button className="google-btn" onClick={openLogin}>Sign in with Google</button><button className="secondary" onClick={() => setView('Models')}>View Registry</button></>}</div></article><article className="wide-panel dashboard-avatar-panel"><p className="eyebrow">profile image</p><p>Drop a PNG, JPEG, WEBP, or GIF file under 750 KB. The image is stored in the backend database and served through your protected profile route.</p><div className={`avatar-dropzone ${user ? '' : 'disabled'}`} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}><div className="avatar-preview">{user?.avatarUrl ? <img src={user.avatarUrl} alt="Profile avatar" /> : <span>{user?.username?.slice(0, 1) || '?'}</span>}</div><div className="avatar-copy"><b>Drop avatar here</b><span>{user ? 'or use file picker' : 'sign in first'}</span></div><label className="secondary avatar-upload-label">Choose file<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={!user} onChange={(event) => { const file = event.target.files?.[0]; if (file) onAvatarFile(file) }} /></label></div><small>{avatarState || 'No avatar uploaded yet.'}</small></article><article className="wide-panel dashboard-key-panel"><p className="eyebrow">api key</p><p>Only one active dashboard key is kept per user. Generating a new one replaces the previous key.</p><div className="dashboard-key-shell"><div className="dashboard-key-readout"><code>{keyVisible ? (userApiKey || 'No key generated yet.') : (userApiKey ? maskApiKey(userApiKey) : 'No key generated yet.')}</code></div><div className="dashboard-key-actions"><button className="secondary" onClick={() => setKeyVisible((value) => !value)} disabled={!userApiKey}>{keyVisible ? 'Hide key' : 'Reveal key'}</button><button className="secondary" onClick={copyUserKey} disabled={!userApiKey}>Copy key</button><button className="primary" onClick={generateKey} disabled={!user}>{userApiKey ? 'Regenerate key' : 'Generate key'}</button></div></div><small>{keyState || 'Keys stay hidden until you explicitly reveal them.'}</small></article></div></section>
-}
+  const rpdUsed = dashboardStats?.rpdUsed || 0
+  const rpdLimit = dashboardStats?.rpdLimit || 0
+  const rpdPercent = rpdLimit > 0 ? Math.min(100, Math.round((rpdUsed / rpdLimit) * 100)) : 0
+  const dailyTokens = dashboardStats?.dailyTokens || 0
+  const totalTokens = dashboardStats?.totalTokens || 0
 
+  return <section className="view-shell dashboard-section"><div className="section-heading"><p className="eyebrow">dashboard</p><h2>Command center.</h2><p>Verified Google sessions can manage avatars, one protected RAZE API key, daily request usage, and live token totals.</p></div><div className="dashboard-grid"><article className="wide-panel dashboard-account-panel"><p className="eyebrow">account</p><h3>{user ? user.username : 'Sign in required'}</h3><p>{user ? user.email + ' - ' + (user.emailVerified ? 'verified Google account' : 'verification required') : 'Sign in with Google to unlock avatar storage, API key creation, and live usage widgets.'}</p><div className="dashboard-actions">{user ? <><button className="primary" onClick={logout}>Sign out</button><button className="secondary" onClick={() => setView('Playground')}>Open Playground</button>{rankingEnabled && <button className="secondary" onClick={() => setView('Ranking')}>Model Ranking</button>}</> : <><button className="google-btn" onClick={openLogin}>Sign in with Google</button><button className="secondary" onClick={() => setView('Models')}>View Registry</button></>}</div></article><article className="dashboard-usage-panel"><span>RPD used</span><b>{formatCompactNumber(rpdUsed)} / {rpdLimit ? formatCompactNumber(rpdLimit) : '-'}</b><div className="dashboard-stat-meter"><i style={{ width: rpdPercent + '%' }} /></div><small>{statsState}</small></article><article className="dashboard-usage-panel token-widget"><span>Tokens today</span><b>{formatCompactNumber(dailyTokens)}</b><div className="token-widget-row"><span>Total tokens</span><strong>{formatCompactNumber(totalTokens)}</strong></div><small>compact daily + lifetime usage</small></article><article className="dashboard-usage-panel"><span>API key</span><b>{dashboardStats?.activeKeyId ? 'Active' : userApiKey ? 'Local key' : 'Missing'}</b><p>{dashboardStats ? 'RPM ' + formatCompactNumber(dashboardStats.rpmLimit) + ' / requests ' + formatCompactNumber(dashboardStats.requestCount) : 'Generate a key to enable routed API usage.'}</p></article><article className="wide-panel dashboard-avatar-panel"><p className="eyebrow">profile image</p><p>Drop a PNG, JPEG, WEBP, or GIF file under 750 KB. The image is stored in the backend database and served through your protected profile route.</p><div className={'avatar-dropzone ' + (user ? '' : 'disabled')} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}><div className="avatar-preview">{user?.avatarUrl ? <img src={user.avatarUrl} alt="Profile avatar" /> : <span>{user?.username?.slice(0, 1) || '?'}</span>}</div><div className="avatar-copy"><b>Drop avatar here</b><span>{user ? 'or use file picker' : 'sign in first'}</span></div><label className="secondary avatar-upload-label">Choose file<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={!user} onChange={(event) => { const file = event.target.files?.[0]; if (file) onAvatarFile(file) }} /></label></div><small>{avatarState || 'No avatar uploaded yet.'}</small></article><article className="wide-panel dashboard-key-panel"><p className="eyebrow">api access</p><h3>{userApiKey ? 'RAZE key ready' : 'Create a user API key'}</h3><p>User keys are capped by the backend RPM/RPD/token guardrails and linked to your verified Google session.</p><div className="key-display"><code>{keyVisible && userApiKey ? userApiKey : maskApiKey(userApiKey)}</code><button className="secondary" onClick={() => setKeyVisible(!keyVisible)} disabled={!userApiKey}>{keyVisible ? 'Hide' : 'Reveal'}</button><button className="secondary" onClick={copyUserKey} disabled={!userApiKey}>Copy</button></div><div className="dashboard-actions"><button className="primary" onClick={generateKey}>{userApiKey ? 'Regenerate key' : 'Generate API key'}</button></div><small>{keyState || 'The full key is only shown in this browser after generation.'}</small></article></div></section>
+}
 function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; updateAdminConfig: (updater: (config: AdminConfig) => AdminConfig) => void; selectedModel: Model; selectedModelId: string; setSelectedModelId: (id: string) => void; adminSection: AdminSection; setAdminSection: (tab: AdminSection) => void; updateModel: (patch: Partial<Model>) => void; addModel: () => void; deleteModel: () => void; saveConfig: () => void; saveSecret: (name: string, value: string) => void; syncState: string; toggleCapability: (cap: Capability) => void; refreshAdmin: () => void; adminKey: string; openConfirm: (title: string, body: string, onConfirm: () => void, confirmLabel?: string, tone?: 'default' | 'danger') => void }) {
   const { models, adminConfig, updateAdminConfig, selectedModel: rawModel, selectedModelId, setSelectedModelId, adminSection, setAdminSection, updateModel, addModel, deleteModel, saveConfig, saveSecret, syncState, toggleCapability, refreshAdmin, adminKey, openConfirm } = props
 
@@ -726,6 +850,8 @@ function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; updateAd
   const [incidentState, setIncidentState] = useState('')
   const [verifiedEmailDraft, setVerifiedEmailDraft] = useState('')
   const [verificationState, setVerificationState] = useState('')
+  const [rankingCategoryId, setRankingCategoryId] = useState(rankingVoteCategories[0].id)
+  const [rankingBoostAmount, setRankingBoostAmount] = useState('10')
   const [adminActionState, setAdminActionState] = useState('')
 
   const storedIncidents = adminConfig.incidents || []
@@ -821,6 +947,26 @@ function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; updateAd
   const unlimitedModels = models.filter((model) => model.rpdExempt)
   const selectedIncidentLog = failedLogs.find((log) => log.incidentCode === selectedIncidentCode) || null
 
+  const rankingCategoryLabel = rankingVoteCategories.find((category) => category.id === rankingCategoryId)?.label || 'Ranking'
+  const selectedRankingVotes = rankingVoteCategories.reduce((total, category) => total + Number(adminConfig.rankingScores?.[category.id]?.[selectedModel.id] || 0), 0)
+  const selectedRankingBoosts = rankingVoteCategories.reduce((total, category) => total + Number(adminConfig.rankingBoosts?.[category.id]?.[selectedModel.id] || 0), 0)
+  const selectedModelUsage = adminConfig.usageCounters?.models?.[selectedModel.id]
+  const rankingEnabled = adminConfig.rankingEnabled === true
+
+  const boostRanking = async () => {
+    const amount = Math.floor(Number(rankingBoostAmount) || 0)
+    if (!amount) {
+      setAdminActionState('Enter a non-zero boost amount first.')
+      return
+    }
+    try {
+      const saved = await adminBoostRanking(adminKey, rankingCategoryId, selectedModel.id, amount)
+      updateAdminConfig(() => saved)
+      setAdminActionState(selectedModel.name + ' boosted by ' + amount + ' pts in ' + rankingCategoryLabel + '.')
+    } catch (error) {
+      setAdminActionState(error instanceof Error ? error.message : 'ranking boost failed')
+    }
+  }
   const addVerifiedEmail = () => {
     const email = verifiedEmailDraft.trim().toLowerCase()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -953,7 +1099,7 @@ function AdminPanel(props: { models: Model[]; adminConfig: AdminConfig; updateAd
       }) : <tr><td colSpan={7}>No user API keys yet.</td></tr>}</tbody></table></div>
     </section>
   </div>
-) : null}{adminSection === 'Unlimited' ? <div className="admin-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">unlimited models</p><h3>RPD exemption</h3></div><span>{unlimitedModels.length} unlimited</span></div><p className="admin-copy">Only routes toggled here skip daily request counting. The backend resolves the trusted route first and ignores client-supplied unlimited flags, tags, aliases, or body fields.</p><div className="unlimited-selected"><div><b>{selectedModel.name}</b><code>{selectedModel.id}</code></div><button type="button" className={selectedModel.rpdExempt ? 'danger' : 'primary'} onClick={() => updateModel({ rpdExempt: !selectedModel.rpdExempt })}>{selectedModel.rpdExempt ? 'Disable unlimited RPD' : 'Make this route unlimited'}</button></div><div className="unlimited-route-list">{models.map((model) => <button key={model.id} type="button" className={'unlimited-route ' + (model.id === selectedModelId ? 'selected ' : '') + (model.rpdExempt ? 'active' : '')} onClick={() => setSelectedModelId(model.id)}><span><b>{model.name}</b><code>{model.id}</code></span><em>{model.rpdExempt ? 'Unlimited RPD' : 'Counts against RPD'}</em></button>)}</div></section><section className="admin-card"><div className="admin-card-head"><div><p className="eyebrow">security note</p><h3>No request-body bypass</h3></div><span>server enforced</span></div><div className="admin-security-list"><p>RPM and token limits still apply to every route.</p><p>RPD exemption is saved in Admin model config and sanitized by the backend.</p><p>Provider model aliases must resolve uniquely; exact route IDs take priority.</p></div></section></div> : null}{adminSection === 'Request Logs' ? <div className="admin-grid request-log-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">logs</p><h3>Recent requests</h3></div><span>{formatNumber(requestLogs.length)} recorded</span></div><div className="request-log-list">{requestLogs.length ? requestLogs.map((log) => <article key={log.id} className={'request-log-card ' + (log.status >= 500 ? 'error' : log.status >= 400 ? 'warn' : '')}><div><span className="request-log-time">{formatDate(log.at)}</span><h4>{log.username || 'unknown user'}</h4><p>{log.email}</p></div><div><code>{log.model}</code><small>{log.streamed ? 'streamed' : 'standard'}{log.rpdExempt ? ' / unlimited RPD' : ''}</small></div><div><span className={'request-status status-' + (log.status >= 500 ? 'error' : log.status >= 400 ? 'warn' : 'ok')}>{log.status}</span><small>{log.incidentCode || 'no incident'}</small></div><div><b>{formatNumber(log.totalTokens)}</b><small>{formatNumber(log.inputTokens)} in / {formatNumber(log.outputTokens)} out</small></div></article>) : <EmptyState title="No request logs yet" body="Successful and failed routed requests will appear here." />}</div></section><section className="admin-card incident-panel"><div className="admin-card-head"><div><p className="eyebrow">alerts</p><h3>Incidents and alerts</h3></div><span>{incidentSummaries.length} total</span></div><div className="incident-list">{incidentSummaries.length ? incidentSummaries.map((incident) => { const expanded = selectedIncidentCode === incident.code; const logEntry = failedLogs.find((l) => l.incidentCode === incident.code) || null; const statusCode = incident.status ?? logEntry?.status ?? 0; const isSevere = statusCode >= 500; return <div key={incident.code} className={'incident-card ' + (expanded ? 'expanded ' : '') + (isSevere ? 'severe' : '')} onClick={() => openIncident(incident.code)}><div className="incident-card-head"><div className="incident-card-head-left"><span className={'incident-status-badge ' + (isSevere ? 'error' : 'warn')}>{statusCode || '5xx'}</span><div><div className="incident-card-code">{incident.code}</div><div className="incident-card-summary"><code>{incident.model || logEntry?.model || 'unknown route'}</code></div></div></div><div className="incident-card-head-right"><small className="incident-card-time">{formatDate(incident.at)}</small>{!expanded && <small className="incident-card-user">{logEntry?.username || logEntry?.email || ''}</small>}</div></div>{expanded && <><div className="incident-card-meta-row"><span className="incident-card-meta-item">{incident.provider || 'unknown provider'}</span><span className="incident-card-meta-item">{logEntry?.email || '-'}</span><span className="incident-card-meta-item tokens">{logEntry ? formatNumber(logEntry.inputTokens) + ' in / ' + formatNumber(logEntry.outputTokens) + ' out' : '-'}</span></div>{incidentState && <div className="incident-card-loading">{incidentState}</div>}{selectedIncidentLog ? <div className="incident-card-section"><div className="incident-card-label">Recorded request context</div><div className="incident-card-log-grid"><div><span>User</span><b>{selectedIncidentLog.username}</b><small>{selectedIncidentLog.email}</small></div><div><span>Tokens</span><b>{formatNumber(selectedIncidentLog.totalTokens)}</b><small>{formatNumber(selectedIncidentLog.inputTokens)} in / {formatNumber(selectedIncidentLog.outputTokens)} out</small></div><div><span>Status</span><b>{selectedIncidentLog.status}</b><small>{formatDate(selectedIncidentLog.at)}</small></div></div></div> : null}{incidentDetail?.upstream ? <div className="incident-card-section"><div className="incident-card-label">Upstream response</div><pre className="incident-card-upstream">{incidentDetail.upstream}</pre></div> : null}</>}</div> }) : <EmptyState title="No incidents yet" body="Provider-side failures and 5xx responses will appear here." />}</div></section></div> : null}</div></div></section>
+) : null}{adminSection === 'Ranking' ? <div className="admin-grid ranking-admin-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">public ranking board</p><h3>{rankingEnabled ? 'Ranking visible' : 'Ranking hidden'}</h3></div><span>{rankingEnabled ? 'on' : 'off by default'}</span></div><p className="admin-copy">Enable this to show the public Model Ranking nav/page and rankings API. Disable it to hide the board while keeping scores, boosts, and usage counters stored.</p><button type="button" className={'admin-toggle admin-ranking-toggle ' + (rankingEnabled ? 'active' : '')} onClick={() => updateAdminConfig((config) => ({ ...config, rankingEnabled: !rankingEnabled }))}><b>{rankingEnabled ? 'Ranking board on' : 'Ranking board off'}</b><small>Save changes to publish this visibility setting.</small></button></section><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">manual ranking boost</p><h3>{selectedModel.name}</h3></div><span>server persisted</span></div><p className="admin-copy">Add admin boost points to a vote category without touching user cooldowns. Most Used Models stays request-based and is shown from real routed usage counters.</p><div className="admin-ranking-controls"><label><span>Vote category</span><select value={rankingCategoryId} onChange={(event) => setRankingCategoryId(event.target.value)}>{rankingVoteCategories.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}</select></label><label><span>Boost points</span><input type="number" value={rankingBoostAmount} onChange={(event) => setRankingBoostAmount(event.target.value)} /></label><button type="button" className="primary" onClick={boostRanking}>Boost selected model</button></div><div className="admin-ranking-summary"><div><span>User votes</span><b>{formatCompactNumber(selectedRankingVotes)}</b></div><div><span>Admin boost</span><b>{formatCompactNumber(selectedRankingBoosts)}</b></div><div><span>Most Used req</span><b>{formatCompactNumber(selectedModelUsage?.requests || 0)}</b></div><div><span>Tokens routed</span><b>{formatCompactNumber(selectedModelUsage?.totalTokens || 0)}</b></div></div><small className="admin-inline-help">{adminActionState || 'Boosts are added on the live backend immediately; Save changes is not required.'}</small></section><section className="admin-card"><div className="admin-card-head"><div><p className="eyebrow">category snapshot</p><h3>{rankingCategoryLabel}</h3></div><span>selected route</span></div><div className="admin-security-list">{rankingVoteCategories.map((category) => { const votes = Number(adminConfig.rankingScores?.[category.id]?.[selectedModel.id] || 0); const boosts = Number(adminConfig.rankingBoosts?.[category.id]?.[selectedModel.id] || 0); return <p key={category.id}><b>{category.label}</b><span>{formatCompactNumber(votes + boosts)} pts ({formatCompactNumber(votes)} votes + {formatCompactNumber(boosts)} boost)</span></p> })}<p><b>Most Used Models</b><span>{formatCompactNumber(selectedModelUsage?.requests || 0)} real requests</span></p></div></section></div> : null}{adminSection === 'Unlimited' ? <div className="admin-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">unlimited models</p><h3>RPD exemption</h3></div><span>{unlimitedModels.length} unlimited</span></div><p className="admin-copy">Only routes toggled here skip daily request counting. The backend resolves the trusted route first and ignores client-supplied unlimited flags, tags, aliases, or body fields.</p><div className="unlimited-selected"><div><b>{selectedModel.name}</b><code>{selectedModel.id}</code></div><button type="button" className={selectedModel.rpdExempt ? 'danger' : 'primary'} onClick={() => updateModel({ rpdExempt: !selectedModel.rpdExempt })}>{selectedModel.rpdExempt ? 'Disable unlimited RPD' : 'Make this route unlimited'}</button></div><div className="unlimited-route-list">{models.map((model) => <button key={model.id} type="button" className={'unlimited-route ' + (model.id === selectedModelId ? 'selected ' : '') + (model.rpdExempt ? 'active' : '')} onClick={() => setSelectedModelId(model.id)}><span><b>{model.name}</b><code>{model.id}</code></span><em>{model.rpdExempt ? 'Unlimited RPD' : 'Counts against RPD'}</em></button>)}</div></section><section className="admin-card"><div className="admin-card-head"><div><p className="eyebrow">security note</p><h3>No request-body bypass</h3></div><span>server enforced</span></div><div className="admin-security-list"><p>RPM and token limits still apply to every route.</p><p>RPD exemption is saved in Admin model config and sanitized by the backend.</p><p>Provider model aliases must resolve uniquely; exact route IDs take priority.</p></div></section></div> : null}{adminSection === 'Request Logs' ? <div className="admin-grid request-log-grid"><section className="admin-card admin-card-span-2"><div className="admin-card-head"><div><p className="eyebrow">logs</p><h3>Recent requests</h3></div><span>{formatNumber(requestLogs.length)} recorded</span></div><div className="request-log-list">{requestLogs.length ? requestLogs.map((log) => <article key={log.id} className={'request-log-card ' + (log.status >= 500 ? 'error' : log.status >= 400 ? 'warn' : '')}><div><span className="request-log-time">{formatDate(log.at)}</span><h4>{log.username || 'unknown user'}</h4><p>{log.email}</p></div><div><code>{log.model}</code><small>{log.streamed ? 'streamed' : 'standard'}{log.rpdExempt ? ' / unlimited RPD' : ''}</small></div><div><span className={'request-status status-' + (log.status >= 500 ? 'error' : log.status >= 400 ? 'warn' : 'ok')}>{log.status}</span><small>{log.incidentCode || 'no incident'}</small></div><div><b>{formatNumber(log.totalTokens)}</b><small>{formatNumber(log.inputTokens)} in / {formatNumber(log.outputTokens)} out</small></div></article>) : <EmptyState title="No request logs yet" body="Successful and failed routed requests will appear here." />}</div></section><section className="admin-card incident-panel"><div className="admin-card-head"><div><p className="eyebrow">alerts</p><h3>Incidents and alerts</h3></div><span>{incidentSummaries.length} total</span></div><div className="incident-list">{incidentSummaries.length ? incidentSummaries.map((incident) => { const expanded = selectedIncidentCode === incident.code; const logEntry = failedLogs.find((l) => l.incidentCode === incident.code) || null; const statusCode = incident.status ?? logEntry?.status ?? 0; const isSevere = statusCode >= 500; return <div key={incident.code} className={'incident-card ' + (expanded ? 'expanded ' : '') + (isSevere ? 'severe' : '')} onClick={() => openIncident(incident.code)}><div className="incident-card-head"><div className="incident-card-head-left"><span className={'incident-status-badge ' + (isSevere ? 'error' : 'warn')}>{statusCode || '5xx'}</span><div><div className="incident-card-code">{incident.code}</div><div className="incident-card-summary"><code>{incident.model || logEntry?.model || 'unknown route'}</code></div></div></div><div className="incident-card-head-right"><small className="incident-card-time">{formatDate(incident.at)}</small>{!expanded && <small className="incident-card-user">{logEntry?.username || logEntry?.email || ''}</small>}</div></div>{expanded && <><div className="incident-card-meta-row"><span className="incident-card-meta-item">{incident.provider || 'unknown provider'}</span><span className="incident-card-meta-item">{logEntry?.email || '-'}</span><span className="incident-card-meta-item tokens">{logEntry ? formatNumber(logEntry.inputTokens) + ' in / ' + formatNumber(logEntry.outputTokens) + ' out' : '-'}</span></div>{incidentState && <div className="incident-card-loading">{incidentState}</div>}{selectedIncidentLog ? <div className="incident-card-section"><div className="incident-card-label">Recorded request context</div><div className="incident-card-log-grid"><div><span>User</span><b>{selectedIncidentLog.username}</b><small>{selectedIncidentLog.email}</small></div><div><span>Tokens</span><b>{formatNumber(selectedIncidentLog.totalTokens)}</b><small>{formatNumber(selectedIncidentLog.inputTokens)} in / {formatNumber(selectedIncidentLog.outputTokens)} out</small></div><div><span>Status</span><b>{selectedIncidentLog.status}</b><small>{formatDate(selectedIncidentLog.at)}</small></div></div></div> : null}{incidentDetail?.upstream ? <div className="incident-card-section"><div className="incident-card-label">Upstream response</div><pre className="incident-card-upstream">{incidentDetail.upstream}</pre></div> : null}</>}</div> }) : <EmptyState title="No incidents yet" body="Provider-side failures and 5xx responses will appear here." />}</div></section></div> : null}</div></div></section>
 }
 
 function LockedAdmin({ openGate }: { openGate: () => void }) {

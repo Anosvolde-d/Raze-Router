@@ -2,6 +2,21 @@ import type { ChangelogEntry } from '../types'
 
 export const changelog: ChangelogEntry[] = [
   {
+    version: 'v0.5.0',
+    label: 'Toggleable model ranking + usage dashboard',
+    date: '2026-05-03',
+    status: 'Live',
+    notes: [
+      'New Model Ranking section with Coding, Creative Writing, Humor & Personality, and Most Used Models categories',
+      'Ranking board is disabled by default and can be published from the Admin Ranking panel',
+      'Most Used Models is ranked from real routed API request counters, not votes or points',
+      'Ranking votes are enforced server-side with a 12-hour cooldown per user and per category',
+      'Admin Ranking panel can add boost points to vote-based categories without changing user cooldowns',
+      'Dashboard now shows styled RPD progress plus compact daily and lifetime token widgets',
+      'Ranking and dashboard APIs are linked to the public model registry and request usage counters',
+    ],
+  },
+  {
     version: 'v0.4.5',
     label: 'Verified access + streaming playground',
     date: '2026-04-30',

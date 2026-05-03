@@ -2,6 +2,11 @@ import type { Model } from './types'
 
 export type UserKeyConfig = { id: string; key?: string; userId?: string; label: string; active: boolean; createdAt: string; lastUsedAt: string | null; requestCount: number; rpmLimit?: number; rpdLimit?: number }
 export type RequestLogEntry = { id: string; at: string; userId: string; keyId?: string; email: string; username: string; model: string; status: number; inputTokens: number; outputTokens: number; totalTokens: number; incidentCode?: string; streamed?: boolean; cacheHit?: boolean; rpdExempt?: boolean }
+export type RankingModel = { id: string; name: string; company: string; status: string; tags: string[]; points: number; requests: number; totalTokens: number }
+export type RankingCategory = { id: string; label: string; description: string; useRequests?: boolean; models: RankingModel[]; userVote?: { modelId: string; at: string; nextVoteAt: string; locked: boolean } }
+export type RankingPayload = { categories: RankingCategory[]; voteCooldownHours: number; generatedAt: string }
+export type DashboardStats = { rpdUsed: number; rpdLimit: number; rpmLimit: number; dailyTokens: number; totalTokens: number; requestCount: number; activeKeyId: string | null }
+export type UsageCounters = { users?: Record<string, { day: string; rpdUsed: number; dailyTokens: number; totalTokens: number }>; models?: Record<string, { requests: number; totalTokens: number }> }
 
 export type StoreConfig = {
   models: Model[]
@@ -11,6 +16,10 @@ export type StoreConfig = {
   userKeys?: UserKeyConfig[]
   requestLogs?: RequestLogEntry[]
   incidents?: Array<{ code: string; at: string; model?: string; provider?: string; status?: number; upstream?: string | null; userKeyId?: string }>
+  rankingEnabled?: boolean
+  rankingScores?: Record<string, Record<string, number>>
+  rankingBoosts?: Record<string, Record<string, number>>
+  usageCounters?: UsageCounters
   audit?: Array<{ at: string; action: string }>
 }
 
@@ -70,6 +79,30 @@ export async function saveProviderSecret(adminKey: string, name: string, value: 
     method: 'POST',
     headers: { 'x-admin-key': adminKey },
     body: JSON.stringify({ name, value }),
+  })
+}
+
+export async function fetchRankings() {
+  return request<RankingPayload>('/api/rankings', { headers: { 'x-session-token': getUserSessionToken() } })
+}
+
+export async function voteRanking(categoryId: string, modelId: string) {
+  return request<RankingPayload>('/api/rankings/vote', {
+    method: 'POST',
+    headers: { 'x-session-token': getUserSessionToken() },
+    body: JSON.stringify({ categoryId, modelId }),
+  })
+}
+
+export async function fetchDashboardStats() {
+  return request<DashboardStats>('/api/dashboard/stats', { headers: { 'x-session-token': getUserSessionToken() } })
+}
+
+export async function adminBoostRanking(adminKey: string, categoryId: string, modelId: string, amount: number) {
+  return request<StoreConfig>('/api/admin/rankings/boost', {
+    method: 'POST',
+    headers: { 'x-admin-key': adminKey },
+    body: JSON.stringify({ categoryId, modelId, amount }),
   })
 }
 

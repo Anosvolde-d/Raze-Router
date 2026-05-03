@@ -1,12 +1,12 @@
 # RAZE Router
 
-RAZE is a free AI router and live model registry for Discord communities. It provides model discovery, route testing, provider configuration, caching policy, session-gated API key generation, request logging, incident tracking, and admin-controlled model cards.
+RAZE is a free AI router and live model registry for Discord communities. It provides model discovery, route testing, provider configuration, caching policy, session-gated API key generation, model ranking, dashboard usage widgets, request logging, incident tracking, and admin-controlled model cards.
 
 RAZE is completely free for everyone. No subscriptions, billing, paid plans, upgrade prompts, credits, invoices, or access tiers.
 
 ## Current version
 
-`v0.4.5`
+`v0.5.0`
 
 ## Architecture
 
@@ -21,6 +21,10 @@ RAZE is completely free for everyone. No subscriptions, billing, paid plans, upg
 - Hashed key storage with fingerprint-only display in admin
 - Per-key RPM/RPD controls plus global defaults for newly generated keys
 - Admin-controlled unlimited model routes that skip RPD counting without trusting client flags
+- Admin-toggleable public Model Ranking section, disabled by default, with Coding, Creative Writing, Humor & Personality, and request-based Most Used Models leaderboards
+- Server-enforced ranking votes with a 12-hour cooldown per user and per category
+- Admin ranking boosts for manually adding points to vote-based categories
+- Dashboard usage widgets for styled RPD progress plus compact daily and lifetime token totals
 - Request logging with input/output/total token estimates, cache hits, RPD exemption markers, and incident codes
 - Context-length validation before provider calls
 - Rate limiting and request size limits
@@ -30,6 +34,18 @@ RAZE is completely free for everyone. No subscriptions, billing, paid plans, upg
 - CORS origin configuration, admin key authentication
 - PostgreSQL and Redis support with local JSON fallback
 - Graceful shutdown for Railway redeployments
+
+## Model ranking
+
+The Model Ranking board is disabled by default and can be published from the Admin Ranking panel. When disabled, the public navigation entry, dashboard shortcut, rankings API, and voting endpoint stay hidden/inactive while stored scores, boosts, and usage counters are preserved.
+
+When enabled, the Model Ranking page lists every public model route from the live registry. Coding, Creative Writing, and Humor & Personality are vote-based categories, while Most Used Models is ranked only by real API requests routed through RAZE.
+
+Votes are enforced on the backend. A signed-in user can vote once every 12 hours per category, so voting in Coding does not block voting in Creative Writing or Humor & Personality. Admins can add boost points from the Admin Ranking panel to promote a model in vote-based categories without changing user vote cooldowns. Most Used Models cannot be boosted because it is derived from request counters.
+
+## Dashboard usage
+
+The Dashboard shows live usage for the signed-in account: a styled RPD counter such as `2 / 50`, current RPM limit, request count, daily tokens, and lifetime tokens. Token numbers use compact formatting such as `1.6K` and `2.1M`.
 
 ## Unlimited models
 
@@ -42,7 +58,10 @@ The backend does not trust client-submitted unlimited flags. For every completio
 | Method | Path                       | Auth         | Description                          |
 |--------|----------------------------|--------------|--------------------------------------|
 | GET    | /health                    | None         | Health check                         |
-| GET    | /api/config                | None         | Public model list                    |
+| GET    | /api/config                | None         | Public model list + ranking visibility |
+| GET    | /api/rankings              | Optional session | Public model rankings when admin-enabled |
+| POST   | /api/rankings/vote         | Session      | Vote in an admin-enabled ranking category |
+| GET    | /api/dashboard/stats       | Session      | RPD and token dashboard counters     |
 | GET    | /v1/models                 | None         | OpenAI-compatible model list         |
 | GET    | /api/session               | Session      | Get current user                     |
 | POST   | /api/session               | None         | Create or resume session             |
@@ -53,6 +72,7 @@ The backend does not trust client-submitted unlimited flags. For every completio
 | GET    | /api/admin/config          | Admin        | Full store (redacted secrets)        |
 | PUT    | /api/admin/config          | Admin        | Save store                           |
 | POST   | /api/admin/secrets         | Admin        | Save provider secret                 |
+| POST   | /api/admin/rankings/boost  | Admin        | Add admin boost points to rankings   |
 | POST   | /api/admin/keys            | Admin        | Create admin API key                 |
 | DELETE | /api/admin/keys            | Admin        | Delete all user API keys             |
 | POST   | /api/admin/test-route      | Admin        | Test route connectivity              |
@@ -119,6 +139,9 @@ npm start
 - Admin routes require the `RAZE_ADMIN_KEY` via `X-Admin-Key` header or `Authorization: Bearer` header
 - All admin-saved models and provider configs are validated and sanitized
 - Unlimited/RPD-exempt routes are decided only after server-side route resolution from persisted Admin config; request body flags, tags, aliases, and duplicate provider-model aliases cannot make a normal model unlimited
+- The ranking board defaults off and rankings/votes stay blocked server-side until Admin enables `rankingEnabled`
+- Ranking vote cooldowns are enforced server-side per signed-in user and category; client state cannot reset the 12-hour lock
+- Most Used Models is calculated from server request counters attached to routed API calls, not from user votes or admin boosts
 
 ## License
 
