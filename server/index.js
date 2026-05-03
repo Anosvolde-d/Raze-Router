@@ -88,6 +88,7 @@ const defaultStore = {
   incidents: [],
   oauthStates: [],
   rankingEnabled: false,
+  rankingGroups: [],
   rankingScores: {},
   rankingBoosts: {},
   rankingVoteLocks: {},
@@ -198,6 +199,7 @@ async function normalizeStoreSecrets(store) {
     incidents: store.incidents || [],
     oauthStates: store.oauthStates || [],
     rankingEnabled: store.rankingEnabled === true,
+    rankingGroups: normalizeRankingGroups(store.rankingGroups || []),
     rankingScores: normalizeRankingScores(store.rankingScores || {}),
     rankingBoosts: normalizeRankingScores(store.rankingBoosts || {}),
     rankingVoteLocks: normalizeRankingVoteLocks(store.rankingVoteLocks || {}),
@@ -484,6 +486,33 @@ function normalizeRankingVoteLocks(locks = {}) {
   return normalized
 }
 
+function normalizeRankingGroups(groups = []) {
+  const seen = new Set()
+  return (Array.isArray(groups) ? groups : []).map((group, index) => {
+    const rawName = sanitizeText(group?.name || group?.id || `Group ${index + 1}`).slice(0, 80)
+    const sourceId = sanitizeText(group?.id || rawName || `group-${index + 1}`)
+    const baseId = sourceId.toLowerCase().replace(/[^a-z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || `group-${index + 1}`
+    let id = baseId
+    let suffix = 2
+    while (seen.has(id)) {
+      id = `${baseId}-${suffix}`.slice(0, 80)
+      suffix += 1
+    }
+    seen.add(id)
+    const modelIds = [...new Set((Array.isArray(group?.modelIds) ? group.modelIds : []).map((modelId) => sanitizeText(modelId).replace(/[^a-zA-Z0-9._:/-]/g, '').slice(0, 160)).filter(Boolean))]
+    return {
+      id,
+      name: rawName || `Group ${index + 1}`,
+      logoUrl: sanitizeUrl(group?.logoUrl || group?.logo || ''),
+      modelIds
+    }
+  }).filter((group) => group.id && group.name)
+}
+
+function rankingGroupForModel(groups, modelId) {
+  return groups.find((group) => Array.isArray(group.modelIds) && group.modelIds.includes(modelId))
+}
+
 function normalizeUsageCounters(counters = {}) {
   const users = {}
   for (const [userId, value] of Object.entries(counters.users || {})) {
@@ -562,6 +591,7 @@ function rankingPayload(store, userId) {
   const scores = normalizeRankingScores(store.rankingScores || {})
   const boosts = normalizeRankingScores(store.rankingBoosts || {})
   const locks = normalizeRankingVoteLocks(store.rankingVoteLocks || {})
+  const groups = normalizeRankingGroups(store.rankingGroups || [])
   const visibleModels = publicModels(store)
   const now = Date.now()
   return {
@@ -569,12 +599,16 @@ function rankingPayload(store, userId) {
       const models = visibleModels.map((model) => {
         const usage = modelUsage(store, model.id)
         const points = safeCounter(scores[category.id]?.[model.id]) + safeCounter(boosts[category.id]?.[model.id])
+        const group = rankingGroupForModel(groups, model.id)
         return {
           id: model.id,
           name: model.name,
           company: model.providerConfig?.provider || 'RAZE',
           status: model.status,
           tags: model.tags || [],
+          groupId: group?.id,
+          groupName: group?.name,
+          groupLogoUrl: group?.logoUrl,
           points,
           requests: usage.requests,
           totalTokens: usage.totalTokens
@@ -587,6 +621,7 @@ function rankingPayload(store, userId) {
         userVote: userLock ? { ...userLock, locked: new Date(userLock.nextVoteAt).getTime() > now } : undefined
       }
     }),
+    rankingGroups: groups,
     voteCooldownHours: rankingVoteCooldownMs / 60 / 60 / 1000,
     generatedAt: new Date().toISOString()
   }
@@ -621,6 +656,7 @@ function adminStore(store) {
     requestLogs: store.requestLogs || [],
     incidents: store.incidents || [],
     rankingEnabled: store.rankingEnabled === true,
+    rankingGroups: normalizeRankingGroups(store.rankingGroups || []),
     rankingScores: normalizeRankingScores(store.rankingScores || {}),
     rankingBoosts: normalizeRankingScores(store.rankingBoosts || {}),
     usageCounters: normalizeUsageCounters(store.usageCounters || {})
@@ -987,6 +1023,7 @@ function sanitizeStoreInput(store) {
     ...store,
     models: Array.isArray(store.models) ? store.models.map(sanitizeModel).filter((model) => model.id) : [],
     rankingEnabled: store.rankingEnabled === true,
+    rankingGroups: normalizeRankingGroups(store.rankingGroups || []),
     verifiedEmails: normalizeVerifiedEmails(store.verifiedEmails || []),
     keyDefaults,
     userKeys: normalizeUserKeys(store.userKeys || [], keyDefaults),
